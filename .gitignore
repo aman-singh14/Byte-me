@@ -6,3 +6,4 @@ backend/data/
 backend/models/
 firmware/esp32cam/secrets.h
 *.pyc
+.env
