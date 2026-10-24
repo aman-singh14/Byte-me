@@ -196,6 +196,75 @@ class _WidgetGalleryState extends State<WidgetGallery> {
         ]),
       ),
     ),
+    (
+      'LeaderboardRow',
+      (_) => OmniCard(
+        child: _Column([
+          LeaderboardRow(rank: 1, name: 'Maya', stars: 14, onTap: () {}),
+          const LeaderboardRow(rank: 2, name: 'Aman', stars: 9, isMe: true),
+          LeaderboardRow(rank: 3, name: 'Sam', stars: 0, onTap: () {}),
+          const LeaderboardRow(
+            rank: 4,
+            name: 'Byte-me',
+            stars: 2.5,
+            subtitle: '3 members',
+            isMe: true,
+            meLabel: 'your team',
+          ),
+        ]),
+      ),
+    ),
+    (
+      'TogetherTimeCard',
+      (_) => _Column([
+        TogetherTimeCard(
+          enabled: true,
+          minutesToday: 95,
+          nearbyNow: const ['Maya'],
+          bestFriends: const [('Maya', 640), ('Sam', 310), ('Ana', 45)],
+          onEnabled: (_) {},
+        ),
+        TogetherTimeCard(
+          enabled: false,
+          minutesToday: 0,
+          nearbyNow: const [],
+          bestFriends: const [],
+          onEnabled: (_) {},
+        ),
+      ]),
+    ),
+    (
+      'SideQuestCard',
+      (_) => const _Column([
+        SideQuestCard(
+          icon: Symbols.eye_tracking_rounded,
+          title: 'Look up',
+          description: 'Heads-up time today: looking farther than a screen.',
+          goals: [30, 60, 120],
+          progress: 75,
+          stars: 2,
+          progressText: '1 h 15 m · next star at 2 h',
+        ),
+        SideQuestCard(
+          icon: Symbols.restaurant_rounded,
+          title: 'Phone-down lunch',
+          description: 'Lunchtime, 11:30 to 2, with nothing held at phone distance.',
+          goals: [15, 30, 45],
+          progress: 50,
+          stars: 3,
+          progressText: '50 m · all 3 stars',
+        ),
+        SideQuestCard(
+          icon: Symbols.diversity_3_rounded,
+          title: 'Break together',
+          description: 'Stay heads-up through a group screen break.',
+          goals: [1, 2, 3],
+          progress: 0,
+          stars: 0,
+          progressText: '0 breaks · first star at 1',
+        ),
+      ]),
+    ),
     ('CaptionView', (_) => const _CaptionDemo()),
     (
       'WhoAroundSheet',

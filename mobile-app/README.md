@@ -24,6 +24,8 @@ truth for all UI.
 | `lib/screens/alert_widgets.dart` | Live alert banner on every tab; one app-wide announcer (voice, screen reader, haptics) |
 | `assets/models/` | YOLO26n at 320 px: `.mlpackage.zip` (iOS), `.tflite` (Android) |
 | `tool/export_yolo.py` | Regenerates the models (instructions at the top of the file) |
+| `lib/social/` | Together: `rings_source.dart` (the interface the rings code implements, plus a stand-in), `social_api.dart` + `social_store.dart` (server client and state), `side_quests.dart`, `together_time.dart` (Bluetooth) |
+| `../social/` | The social server (FastAPI + SQLite); deploy steps in its README |
 | `lib/screens/` | Bottom navigation (Today, Aware, Eyes, Together) and Settings |
 | `lib/gallery/widget_gallery.dart` | Widget Gallery debug screen |
 | `../mock_glasses.py` | Fake glasses for development |
@@ -208,6 +210,60 @@ at the top of the file or class, easy to tune at the venue):
 
 Try it with the mock: walk toward the webcam (gentle "person" alert at about
 2 s to contact), or type `fl`. The mock prints the `alert` and `stop` messages.
+
+## Together (friends, teams, quests)
+
+Run the social server (see `../social/README.md`), then the app as usual: it
+uses `http://localhost:8000` unless built with `--dart-define=SOCIAL_URL=...`
+or changed in Settings > Together server.
+
+- **Joining:** pick a display name. No account or password; the server hands
+  the phone a random token.
+- **Friends and this week's stars:** add each other with a 6-letter friend
+  code. A leaderboard ranks you and your friends by side quest stars from
+  Monday to now (each person's own week).
+- **Team:** make one or join with a team code. The **team ring** is everyone's
+  two rings averaged. Turning on **Public team** puts it in the league and
+  gives it a read-only page (`/t/<id>` on the server) to share with judges.
+- **Team league:** public teams (and yours, even while private) ranked by
+  points this week: 10 per side quest star per member, plus the team's
+  average ring this week, so quests and rings both count and a small team
+  can beat a big one. Tap a team for its page: points, rings today, stars by
+  quest, and members.
+- **Profiles:** tap a friend (leaderboard) or a teammate (team card or a
+  team's page) to see their stars this week by quest, their average ring
+  this week, and today's rings. Phones upload each day's stars by quest
+  along with the total, so these add up on the server.
+- **Group screen breaks:** a reminder, nothing measured. Anyone on the team
+  schedules one (now, in 5/15/30 min or at a time, for 10/15/20 min); it
+  shows as one line in the team card and on Today, with Cancel until it
+  starts. At the start every teammate's glasses get `{"t":"groupbreak"}` and
+  the app says "Look up and talk".
+- **Side quests:** always running, nothing to start or tap. Each has three
+  goals and each goal reached earns a star (3 a quest, 12 a day):
+  - Look up: heads-up minutes today (30 / 60 / 120).
+  - Golden hour: minutes outside (over 1,000 lux) between 5 and 8 pm (10 / 20 / 40).
+  - Phone-down lunch: minutes between 11:30 and 2 with nothing closer than
+    45 cm, the distance a phone is held at (15 / 30 / 45). A plate or a
+    friend across the table is farther, so it still counts.
+  - Hang out: minutes with a friend nearby, from Together time (15 / 30 / 60).
+
+  Measured on the phone from the glasses' sensor samples and starting over
+  each day. Only the day's star count is uploaded, with the ring
+  percentages. A star gets a celebration, and it says so when it moves you
+  past a friend on the leaderboard. Stars are self-reported by the phone;
+  there's no cheat-proofing.
+- **Together time (Bluetooth, off by default):** while the app is open, the
+  phone advertises a random id only friends learn and listens for theirs;
+  a friend within a few meters counts as together. Its card shows today's
+  minutes, who's nearby now, and **best friends**: the friends you spent the
+  most time near over the last 30 days. Minutes stay on the phone (kept 30
+  days). Needs real phones (the simulator has no Bluetooth). Limitation: the
+  id doesn't rotate yet, and iOS stops advertising in the background.
+- **Rings:** the social features read today's Heads-up and Outside minutes
+  through `RingsSource` (`lib/social/rings_source.dart`). `StandInRings`
+  fills in from sensor samples until the real rings code implements it;
+  swap it in `main.dart`. Only the percentages leave the phone.
 
 ## Widget Gallery
 

@@ -26,21 +26,32 @@ enum RingKind {
 }
 
 class RingData {
-  const RingData(this.kind, {required this.minutes, required this.goalMinutes});
+  const RingData(this.kind, {required this.minutes, required this.goalMinutes}) : _percentOnly = false, note = '';
+
+  /// A ring known only as a percentage, like the team ring (an average of
+  /// everyone's rings, so it has no minutes of its own). [note] replaces the
+  /// "2 h of 3 h" line: "Team average".
+  const RingData.percent(this.kind, int percent, {this.note = ''})
+    : minutes = percent,
+      goalMinutes = 100,
+      _percentOnly = true;
 
   final RingKind kind;
   final int minutes;
   final int goalMinutes;
+  final bool _percentOnly;
+  final String note;
 
   double get fraction => goalMinutes <= 0 ? 0 : (minutes / goalMinutes).clamp(0.0, 1.0);
   int get percent => goalMinutes <= 0 ? 0 : (minutes * 100 / goalMinutes).round();
 
-  /// "2 h 10 m of 3 h"
-  String get valueText => '${formatMinutes(minutes)} of ${formatMinutes(goalMinutes)}';
+  /// "2 h 10 m of 3 h", or the note for a percentage-only ring
+  String get valueText => _percentOnly ? note : '${formatMinutes(minutes)} of ${formatMinutes(goalMinutes)}';
 
   /// "Heads-up ring, 2 hours 10 minutes of 3 hours, 72 percent."
-  String get semanticLabel =>
-      '${kind.label} ring, ${spokenMinutes(minutes)} of ${spokenMinutes(goalMinutes)}, $percent percent.';
+  String get semanticLabel => _percentOnly
+      ? '${kind.label} ring, $percent percent.'
+      : '${kind.label} ring, ${spokenMinutes(minutes)} of ${spokenMinutes(goalMinutes)}, $percent percent.';
 }
 
 class RingStack extends StatefulWidget {
@@ -55,7 +66,9 @@ class RingStack extends StatefulWidget {
   State<RingStack> createState() => _RingStackState();
 }
 
-class _RingStackState extends State<RingStack> with SingleTickerProviderStateMixin {
+// Kept alive in scrolling lists, so a ring fills once instead of every time
+// it scrolls back into view.
+class _RingStackState extends State<RingStack> with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 600),
@@ -108,7 +121,11 @@ class _RingStackState extends State<RingStack> with SingleTickerProviderStateMix
   }
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     final c = context.colors;
     final rings = AnimatedBuilder(
       animation: _curve,
@@ -195,7 +212,8 @@ class _LegendRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('${ring.kind.label} · ${ring.percent}%', style: context.type.label),
-              Text(ring.valueText, style: context.type.body.copyWith(color: c.textSecondary)),
+              if (ring.valueText.isNotEmpty)
+                Text(ring.valueText, style: context.type.body.copyWith(color: c.textSecondary)),
             ],
           ),
         ),

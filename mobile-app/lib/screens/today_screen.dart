@@ -10,6 +10,7 @@ import '../components/event_log.dart';
 import '../theme/theme.dart';
 import 'alert_widgets.dart';
 import 'home_shell.dart';
+import 'together_widgets.dart';
 import 'link_widgets.dart';
 import 'settings_screen.dart';
 
@@ -43,11 +44,7 @@ class TodayScreen extends StatelessWidget {
           title: 'Eyes',
           text: 'Close-up minutes and blink rate arrive in phase 3.',
         ),
-        const PlaceholderCard(
-          icon: Symbols.groups_rounded,
-          title: 'Quests',
-          text: 'Group and side quests arrive in phase 3.',
-        ),
+        const QuestsTodayCard(),
       ],
     );
   }

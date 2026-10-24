@@ -8,7 +8,9 @@ import 'package:provider/provider.dart';
 import '../gallery/widget_gallery.dart';
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
+import '../social/social_store.dart';
 import '../theme/theme.dart';
+import 'together_screen.dart' show askText;
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -49,6 +51,7 @@ class SettingsScreen extends StatelessWidget {
               'this app on UDP port $appUdpPort. No venue Wi-Fi needed.',
             ),
           ),
+          const _TogetherSettings(),
           _Header('Privacy'),
           const ListTile(
             leading: Icon(Symbols.videocam_off_rounded),
@@ -57,7 +60,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           const ListTile(
             leading: Icon(Symbols.lock_rounded),
-            title: Text('Friends see your ring % only'),
+            title: Text('Friends see your rings and stars only'),
             subtitle: Text('Sensor data stays on this phone.'),
           ),
           if (kDebugMode) ...[
@@ -85,6 +88,69 @@ class _Header extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.fromLTRB(context.space.l, context.space.xl, context.space.l, context.space.s),
       child: Semantics(header: true, child: Text(text, style: context.type.headline)),
+    );
+  }
+}
+
+/// Your Together name, which server it uses, and deleting your data there.
+class _TogetherSettings extends StatelessWidget {
+  const _TogetherSettings();
+
+  @override
+  Widget build(BuildContext context) {
+    final social = context.watch<SocialStore>();
+    final me = social.me;
+
+    Future<void> run(Future<String?> Function() action, String done) async {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(SnackBar(content: Text(await action() ?? done)));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Header('Together'),
+        if (me != null)
+          ListTile(
+            leading: const Icon(Symbols.badge_rounded),
+            title: const Text('Your name'),
+            subtitle: Text(me.name),
+            onTap: () async {
+              final name = await askText(context, title: 'Your name', label: 'Name friends see', action: 'Save');
+              if (name != null && name.isNotEmpty) await run(() => social.rename(name), 'Name saved.');
+            },
+          ),
+        ListTile(
+          leading: const Icon(Symbols.dns_rounded),
+          title: const Text('Together server'),
+          subtitle: Text(social.serverUrl.toString()),
+          onTap: () async {
+            final url = await askText(context, title: 'Together server', label: 'Address', action: 'Use', code: true);
+            final uri = url == null ? null : Uri.tryParse(url.toLowerCase());
+            if (uri != null && uri.hasScheme) await social.setServer(uri);
+          },
+        ),
+        if (me != null)
+          ListTile(
+            leading: const Icon(Symbols.delete_rounded),
+            title: const Text('Delete my Together data'),
+            subtitle: const Text('Removes your name, rings, friends and teams from the server.'),
+            onTap: () async {
+              final sure = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Delete your Together data?'),
+                  content: const Text('Friends and teams lose you. This can\'t be undone.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+                  ],
+                ),
+              );
+              if (sure == true) await run(social.deleteAccount, 'Your Together data is deleted.');
+            },
+          ),
+      ],
     );
   }
 }

@@ -11,6 +11,7 @@ import 'eyes_screen.dart';
 import 'link_widgets.dart';
 import 'today_screen.dart';
 import 'together_screen.dart';
+import 'together_widgets.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -28,17 +29,19 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     return LinkAnnouncer(
       child: AlertAnnouncer(
-        child: Scaffold(
-          body: IndexedStack(index: _tab, children: _tabs),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Symbols.today_rounded), label: 'Today'),
-              NavigationDestination(icon: Icon(Symbols.radar_rounded), label: 'Aware'),
-              NavigationDestination(icon: Icon(Symbols.visibility_rounded), label: 'Eyes'),
-              NavigationDestination(icon: Icon(Symbols.groups_rounded), label: 'Together'),
-            ],
+        child: TogetherAnnouncer(
+          child: Scaffold(
+            body: IndexedStack(index: _tab, children: _tabs),
+            bottomNavigationBar: NavigationBar(
+              selectedIndex: _tab,
+              onDestinationSelected: (i) => setState(() => _tab = i),
+              destinations: const [
+                NavigationDestination(icon: Icon(Symbols.today_rounded), label: 'Today'),
+                NavigationDestination(icon: Icon(Symbols.radar_rounded), label: 'Aware'),
+                NavigationDestination(icon: Icon(Symbols.visibility_rounded), label: 'Eyes'),
+                NavigationDestination(icon: Icon(Symbols.groups_rounded), label: 'Together'),
+              ],
+            ),
           ),
         ),
       ),
@@ -77,6 +80,7 @@ class TabPage extends StatelessWidget {
                 if (linkBanner) const LiveStatusStrip(bannerOnly: true),
                 for (final child in children)
                   Padding(
+                    key: child.key, // lets a keyed card keep its state when others come and go
                     padding: EdgeInsets.only(top: space.cardGap),
                     child: child,
                   ),

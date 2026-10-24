@@ -1,6 +1,8 @@
 // Every screen and the Widget Gallery lay out without overflow on a small
 // phone, in light and dark, at 100% and 200% text.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,10 +15,18 @@ import 'package:omni_glasses/gallery/widget_gallery.dart';
 import 'package:omni_glasses/net/glasses_link.dart';
 import 'package:omni_glasses/net/protocol.dart';
 import 'package:omni_glasses/screens/home_shell.dart';
+import 'package:omni_glasses/screens/profile_sheets.dart';
+import 'package:omni_glasses/social/rings_source.dart';
+import 'package:omni_glasses/social/side_quests.dart';
+import 'package:omni_glasses/social/social_api.dart';
+import 'package:omni_glasses/social/social_store.dart';
+import 'package:omni_glasses/social/together_time.dart';
 import 'package:omni_glasses/vision/detector.dart';
 import 'package:omni_glasses/vision/fire_namer.dart';
 import 'package:omni_glasses/vision/rear_vision.dart';
 import 'package:provider/provider.dart';
+
+import 'social_test.dart' show FakeRadio, FixedRings, signedInStore;
 
 Future<AlertService> pumpApp(
   WidgetTester tester,
@@ -26,6 +36,7 @@ Future<AlertService> pumpApp(
   AlertEngine? engine,
   Voice? voice,
   FireNamer? namer,
+  bool together = false,
 }) async {
   tester.view.physicalSize = const Size(360 * 3, 740 * 3); // small Android phone
   tester.view.devicePixelRatio = 3;
@@ -37,6 +48,14 @@ Future<AlertService> pumpApp(
   final link = GlassesLink(port: 0); // not started: stays "searching", no camera
   final vision = RearVision(link, _NoDetector());
   final alerts = AlertService(link, vision, engine: engine, namer: namer);
+  final rings = FixedRings();
+  final social = together ? await signedInStore(link) : SocialStore(link: link, rings: rings);
+  final quests = SideQuestStore(rings: rings, sens: link.sens);
+  if (together) rings.set(70, 0); // two Look up stars
+  final togetherTime = TogetherTime(social: social, radio: FakeRadio());
+  addTearDown(togetherTime.dispose);
+  addTearDown(quests.dispose);
+  addTearDown(social.dispose);
   addTearDown(alerts.dispose);
   addTearDown(vision.dispose);
   addTearDown(link.dispose);
@@ -47,6 +66,10 @@ Future<AlertService> pumpApp(
         ChangeNotifierProvider.value(value: vision),
         ChangeNotifierProvider.value(value: alerts),
         Provider<Voice?>.value(value: voice),
+        ListenableProvider<RingsSource>.value(value: rings),
+        ChangeNotifierProvider.value(value: social),
+        ChangeNotifierProvider.value(value: quests),
+        ChangeNotifierProvider.value(value: togetherTime),
       ],
       child: MaterialApp(theme: omniLightTheme, darkTheme: omniDarkTheme, home: home),
     ),
@@ -114,6 +137,52 @@ void main() {
           expect(find.byType(AlertBanner), findsOneWidget, reason: 'banner on $tab');
           await scrollThrough(tester);
         }
+      });
+
+      testWidgets('Together and Today lay out signed in, with a team, a break and quests ($label)', (tester) async {
+        await pumpApp(tester, const HomeShell(), brightness: brightness, textScale: scale, together: true);
+        for (final tab in ['Together', 'Today']) {
+          await tester.tap(find.text(tab).last);
+          await tester.pump(const Duration(milliseconds: 700));
+          await scrollThrough(tester);
+        }
+        expect(find.textContaining(RegExp('screen break', caseSensitive: false)), findsWidgets);
+      });
+
+      testWidgets('person and team profiles lay out ($label)', (tester) async {
+        await pumpApp(tester, const HomeShell(), brightness: brightness, textScale: scale, together: true);
+        final context = tester.element(find.byType(HomeShell));
+        final social = Provider.of<SocialStore>(context, listen: false);
+
+        unawaited(
+          showPersonSheet(
+            context,
+            const Person(
+              id: 2,
+              name: 'Maya',
+              headsUp: 85,
+              outside: 60,
+              starsThisWeek: 7,
+              questsThisWeek: {'look_up': 4},
+              ringWeek: 55,
+            ),
+            subtitle: 'Friend',
+            onRemove: () async {},
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(find.text('Side quests this week'), findsOneWidget);
+        await tester.drag(find.byType(DraggableScrollableSheet), const Offset(0, -2000));
+        await tester.pump(const Duration(milliseconds: 700));
+        Navigator.pop(context);
+        await tester.pump(const Duration(milliseconds: 700));
+
+        unawaited(showTeamSheet(context, social.league.first));
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(find.text('Members'), findsOneWidget);
+        await tester.drag(find.byType(DraggableScrollableSheet), const Offset(0, -3000));
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(find.text('Maya'), findsWidgets); // the members loaded
       });
 
       testWidgets('Widget Gallery lays out ($label)', (tester) async {
