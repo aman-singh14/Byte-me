@@ -1,5 +1,5 @@
-// Eyes: eye-health dashboard. Phase 1 step 1 shows the live sensor values so
-// you can see the link working. Nothing here is stored.
+// Eyes: eye-health dashboard. "Right now" shows the live sensor values from the
+// glasses link; the cards below come from the laptop backend (EYE + FRONT cameras).
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -9,6 +9,7 @@ import '../components/common.dart';
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
 import '../theme/theme.dart';
+import 'eyes_widgets.dart';
 import 'home_shell.dart';
 
 class EyesScreen extends StatelessWidget {
@@ -39,11 +40,9 @@ class EyesScreen extends StatelessWidget {
             ],
           ),
         ),
-        const PlaceholderCard(
-          icon: Symbols.visibility_rounded,
-          title: 'Habits linked to eye strain',
-          text: 'Close-up time, reading distance, blink rate, longest session and breaks arrive in phase 3.',
-        ),
+        const BlinkCard(),
+        const BlinkTrendCard(),
+        const CloseupCard(),
       ],
     );
   }

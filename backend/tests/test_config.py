@@ -31,7 +31,7 @@ class ProductConfig(unittest.TestCase):
 
     def test_product_methods(self):
         self.assertEqual(self.cfg["eye"]["method"], "closeup")
-        self.assertEqual(self.cfg["distance"]["method"], "object")
+        self.assertEqual(self.cfg["distance"]["method"], "nearwork")
         self.assertEqual(self.cfg["rear"]["mode"], "fpga")
         self.assertFalse(self.cfg["dev"])
 
@@ -58,6 +58,13 @@ class DevConfig(unittest.TestCase):
         # Untouched product values survive the merge.
         self.assertEqual(cfg["distance"]["too_close_cm"], {"laptop": 50, "phone": 30})
         self.assertEqual(cfg["api"]["port"], 8000)
+
+    def test_dev_gaze_defaults_match_a_facing_webcam(self):
+        g = load_config(dev=True)["gaze"]
+        self.assertTrue(g["front_mirrored"])
+        self.assertGreater(g["default_centroids"]["left"][0], 0)    # look left = iris to picture's right
+        self.assertLess(g["default_centroids"]["right"][0], 0)
+        self.assertEqual(load_config()["gaze"]["default_centroids"]["left"][0], -0.25)   # product unchanged
 
     def test_deep_merge_does_not_mutate(self):
         base = {"a": {"b": 1, "c": 2}, "d": [1]}

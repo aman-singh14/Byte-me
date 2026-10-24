@@ -9,9 +9,11 @@ import '../components/common.dart';
 import '../components/event_log.dart';
 import '../theme/theme.dart';
 import 'alert_widgets.dart';
+import 'ask_widgets.dart';
 import 'home_shell.dart';
 import 'together_widgets.dart';
 import 'link_widgets.dart';
+import 'rings_widgets.dart';
 import 'settings_screen.dart';
 
 class TodayScreen extends StatelessWidget {
@@ -32,18 +34,11 @@ class TodayScreen extends StatelessWidget {
       ],
       children: [
         const LiveStatusStrip(),
-        const PlaceholderCard(
-          icon: Symbols.eye_tracking_rounded,
-          title: 'Rings',
-          text: 'Heads-up and Outside rings arrive in phase 3.',
-        ),
+        const AskCard(),
+        const RingsCard(),
         if (following != null) const LiveFollowingCard(),
         const _AwarenessCard(),
-        const PlaceholderCard(
-          icon: Symbols.visibility_rounded,
-          title: 'Eyes',
-          text: 'Close-up minutes and blink rate arrive in phase 3.',
-        ),
+        const EyesSummaryCard(),
         const QuestsTodayCard(),
       ],
     );

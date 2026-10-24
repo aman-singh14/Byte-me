@@ -24,6 +24,17 @@ same network can call it. Interactive docs at /docs.
     POST /rear/packets           raw rear-protocol packets (HTTP transport for an ESP32 bridge)
     GET  /rear/status            FPGA link: online, packet/CRC stats, last result
     GET  /rear/events            recent rear results (what, dangerous, side, time to contact)
+    GET  /eyes/live              blinks/min, partial blinks, squint, low-blink flag, near-work + distance
+    GET  /eyes/history?range=    hour | day | week: blink rate, partial blinks, squints, low-blink stretches
+    GET  /closeup/sessions?date= close-up sessions for a day (YYYY-MM-DD, default today) + totals by object
+    GET  /closeup/calibration    which near-work objects are calibrated, thresholds
+    POST /closeup/calibrate      {"object": "phone"|"laptop"|"book"|"tv"|"keyboard", "known_cm": 40}
+    GET  /rings/today            heads-up (minutes, goal, breaks), outside (minutes, goal), points
+    GET  /rings/history?days=7   one entry per day
+    GET  /outdoor                live brightness estimate, outside or not, sensor status
+    POST /outdoor/calibrate      {"where": "indoor"|"outdoor"} at a typical spot
+    POST /dev/outside            {"on": true|false|null}: dev mode only, force outdoor on/off/auto
+    GET  /discovery              cameras that announced themselves, stream URL candidates
     GET  /screentime             Mac app usage (real) + iOS usage (mock, labelled)
     GET  /screentime/correlation eye metrics per Mac app and category
     GET  /facetime               current OBS scene
@@ -45,6 +56,7 @@ from backend import screentime
 from backend.db import RANGES
 from backend.facetime import FaceTimeError, FaceTimeSwitch
 from backend.recommendations import recommend
+from backend.rings import DAY, closeup_summary, day_start
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -59,6 +71,19 @@ class Device(BaseModel):
 
 class FaceTimeTarget(BaseModel):
     target: str = "toggle"
+
+
+class CloseupCalibration(BaseModel):
+    object: str
+    known_cm: float
+
+
+class OutdoorCalibration(BaseModel):
+    where: str
+
+
+class OutsideOverride(BaseModel):
+    on: bool | None = None
 
 
 class LookRequest(BaseModel):
@@ -188,6 +213,91 @@ def create_app(rt):
                 raise HTTPException(400, f"{name}: need 0 <= start < end <= 1")
         rt.gaze.regions = {k: tuple(v) for k, v in regions.items()}
         return {"ok": True, "regions": rt.gaze.regions}
+
+    EYE_KEYS = ("eye_detected", "calibrated", "calibrating", "blink_rate", "blinks_total", "partial_blinks",
+                "squinting", "openness_ratio", "low_blink", "low_blink_since", "method")
+    NEAR_KEYS = ("nearwork", "nearwork_object", "nearwork_distance_cm", "nearwork_close", "nearwork_threshold_cm",
+                 "nearwork_objects", "closeup_session", "heads_up")
+
+    @app.get("/eyes/live")
+    def eyes_live():
+        d = rt.live()
+        return {"ts": d["ts"], "cameras": d.get("cameras", {}), **{k: d.get(k) for k in EYE_KEYS},
+                **{k: d.get(k) for k in NEAR_KEYS}}
+
+    @app.get("/eyes/history")
+    def eyes_history(range: str = "day"):
+        since = check_range(range)
+        h = rt.db.history(range)
+        b = h["bucket_s"]
+        partial = {}
+        for e in rt.db.events(["partial_blink"], since=since, limit=100000):
+            k = int(e["ts"] // b) * b
+            partial[k] = partial.get(k, 0) + 1
+        points = [{"t": p["t"], "blink_rate": p["blink_rate"], "blinks": p["blinks"],
+                   "partial_blinks": partial.get(p["t"], 0), "squint_frac": p["squint_frac"]} for p in h["points"]]
+        squints = [e["ts"] for e in rt.db.events(["squint_start"], since=since, limit=10000)][::-1]
+        low = rt.db.intervals("low_blink", since, time.time() + 1)
+        live = rt.live()
+        if live.get("low_blink") and live.get("low_blink_since"):
+            low = low + [{"start": live["low_blink_since"], "end": live["ts"], "open": True}]
+        return {"range": range, "bucket_s": b, "points": points, "squints": squints,
+                "low_blink": [{"start": i["start"], "end": i["end"], "open": i.get("open", False)} for i in low]}
+
+    @app.get("/closeup/sessions")
+    def closeup_sessions(date: str | None = None):
+        if date:
+            try:
+                d0 = day_start(time.mktime(time.strptime(date, "%Y-%m-%d")) + 3600)
+            except ValueError:
+                raise HTTPException(400, "date must be YYYY-MM-DD")
+        else:
+            d0 = day_start()
+        return closeup_summary(rt.db, d0, open_session=rt.front.closeup.open_session(time.time()))
+
+    @app.get("/closeup/calibration")
+    def closeup_calibration():
+        return rt.front.nearwork.calibration()
+
+    @app.post("/closeup/calibrate")
+    def closeup_calibrate(body: CloseupCalibration):
+        if not 5 <= body.known_cm <= 500:
+            raise HTTPException(400, "known_cm must be between 5 and 500")
+        try:
+            return rt.front.nearwork.calibrate(body.object, body.known_cm)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+    @app.get("/rings/today")
+    def rings_today():
+        return {**rt.rings.today(), "heads_up_now": rt.front.headsup.active(time.time()),
+                "outside_now": rt.front.outdoor.outside}
+
+    @app.get("/rings/history")
+    def rings_history(days: int = Query(7, ge=1, le=60)):
+        return rt.rings.history(days)
+
+    @app.get("/outdoor")
+    def outdoor_live():
+        return rt.front.outdoor.state(time.time())
+
+    @app.post("/outdoor/calibrate")
+    def outdoor_calibrate(body: OutdoorCalibration):
+        try:
+            return rt.front.outdoor.calibrate(body.where)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/dev/outside")
+    def dev_outside(body: OutsideOverride):
+        if not rt.cfg.get("dev"):
+            raise HTTPException(403, "only in dev mode (--dev)")
+        rt.front.outdoor.manual = body.on
+        return {"manual": body.on}
+
+    @app.get("/discovery")
+    def discovery():
+        return rt.directory.status()
 
     @app.post("/assist/look")
     def assist_look(body: LookRequest | None = None):

@@ -13,4 +13,6 @@ obsws-python==1.8.0
 ultralytics==8.4.187
 # USB-serial receiver for the rear FPGA's event packets
 pyserial==3.5
+# FastAPI's TestClient (backend tests)
+httpx==0.28.1
 # Optional, not installed by default: pyttsx3 (speech off macOS)

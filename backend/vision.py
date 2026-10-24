@@ -67,9 +67,11 @@ class Detector:
                 print(f"[vision] YOLO unavailable: {e!r}")
         return self._model
 
-    def detect(self, frame, x_offset=0, full_width=None, focal_px=None):
+    def detect(self, frame, x_offset=0, full_width=None, focal_px=None, mirrored=False):
         """Detections in `frame` (which may be a crop starting at x_offset of a frame
-        full_width wide). Positions and distances refer to the full frame."""
+        full_width wide). Positions and distances refer to the full frame. mirrored: the
+        picture is a mirror image of the wearer's view (a webcam facing them, dev only),
+        so image-left is the wearer's right."""
         model = self._load()
         if model is None:
             return []
@@ -86,6 +88,8 @@ class Detector:
             x0, y0, x1, y1 = (float(v) for v in b.xyxy[0].tolist())
             cx = (x0 + x1) / 2 + x_offset
             position = "left" if cx < full_w / 3 else "right" if cx > 2 * full_w / 3 else "ahead"
+            if mirrored and position != "ahead":
+                position = "right" if position == "left" else "left"
             dist = None
             if focal_px and label in KNOWN_SIZES:
                 real, axis = KNOWN_SIZES[label]

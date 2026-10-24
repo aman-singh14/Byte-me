@@ -54,6 +54,31 @@ CREATE TABLE IF NOT EXISTS muse_calls (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS muse_calls_ts ON muse_calls (ts);
+CREATE TABLE IF NOT EXISTS closeup_sessions (
+    id INTEGER PRIMARY KEY,
+    start REAL NOT NULL,
+    end REAL NOT NULL,
+    object TEXT NOT NULL,
+    min_cm REAL,
+    avg_cm REAL,
+    samples INTEGER
+);
+CREATE INDEX IF NOT EXISTS closeup_start ON closeup_sessions (start);
+CREATE TABLE IF NOT EXISTS intervals (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,              -- heads_up | outside | low_blink
+    start REAL NOT NULL,
+    end REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS intervals_kind ON intervals (kind, start);
+CREATE TABLE IF NOT EXISTS points (
+    id INTEGER PRIMARY KEY,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,
+    points INTEGER NOT NULL,
+    reason TEXT
+);
+CREATE INDEX IF NOT EXISTS points_ts ON points (ts);
 """
 
 RANGES = {           # range -> (seconds, bucket seconds)
@@ -208,6 +233,30 @@ class DB:
 
     def muse_recent(self, limit=10):
         return self._query("SELECT * FROM muse_calls ORDER BY ts DESC LIMIT ?", (limit,))
+
+    def add_closeup_session(self, s):
+        return self._exec("INSERT INTO closeup_sessions (start, end, object, min_cm, avg_cm, samples) "
+                          "VALUES (?, ?, ?, ?, ?, ?)",
+                          (s["start"], s["end"], s["object"], s.get("min_cm"), s.get("avg_cm"), s.get("samples")))
+
+    def closeup_sessions(self, since, until):
+        return self._query("SELECT * FROM closeup_sessions WHERE end >= ? AND start < ? ORDER BY start",
+                           (since, until))
+
+    def add_interval(self, kind, start, end):
+        return self._exec("INSERT INTO intervals (kind, start, end) VALUES (?, ?, ?)", (kind, start, end))
+
+    def intervals(self, kind, since, until):
+        return self._query("SELECT * FROM intervals WHERE kind = ? AND end >= ? AND start < ? ORDER BY start",
+                           (kind, since, until))
+
+    def add_points(self, ts, kind, points, reason=None):
+        return self._exec("INSERT INTO points (ts, kind, points, reason) VALUES (?, ?, ?, ?)",
+                          (ts, kind, int(points), reason))
+
+    def points(self, since, until=None):
+        return self._query("SELECT * FROM points WHERE ts >= ? AND ts < ? ORDER BY ts",
+                           (since, until if until is not None else 1e18))
 
     def clear_source(self, source):
         self._exec("DELETE FROM app_usage WHERE source = ?", (source,))

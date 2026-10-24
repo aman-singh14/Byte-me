@@ -1,7 +1,7 @@
 """App usage and its correlation with eye metrics.
 
-Real iOS Screen Time data cannot leave the phone in a hackathon (see
-docs/screen_time.md). What we have instead:
+Real iOS Screen Time data cannot leave the phone without a FamilyControls-entitled
+app (DeviceActivityReport extensions have no network access). What we have instead:
 
   mac   REAL: the Mac's frontmost app, polled with `lsappinfo` (no permissions
         needed). Each app session is joined with the eye samples recorded
@@ -100,7 +100,7 @@ def ios_mock_today():
         "source": "ios_mock",
         "mock": True,
         "note": "Sample data. iOS Screen Time cannot be exported to a server without a "
-                "FamilyControls-entitled app; see docs/screen_time.md.",
+                "FamilyControls-entitled app.",
         "total_min": total,
         "apps": [{"app": a, "category": c, "minutes": m} for a, c, m in IOS_MOCK],
         "by_category": by_cat,

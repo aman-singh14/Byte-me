@@ -2,7 +2,9 @@
 
 FaceTime on the Mac uses "OBS Virtual Camera"; OBS has two scenes ("Mac Webcam",
 "Glasses POV"), and this flips between them over obs-websocket (built into OBS 28+).
-Setup: docs/facetime.md.
+OBS setup: a Media Source on the FRONT camera's MJPEG URL in scene "Glasses POV", the Mac
+camera in "Mac Webcam", Tools > WebSocket Server Settings on (port 4455), Start Virtual
+Camera, then FaceTime > Video > OBS Virtual Camera. Mac FaceTime only.
 
     python -m backend.facetime status | glasses | mac | toggle
 """

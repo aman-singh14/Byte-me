@@ -15,12 +15,20 @@
 cameras:
   eye:
     source: "http://eye-cam.local:81/stream"
+    static_ip: null       # e.g. 172.20.10.3 if mDNS doesn't resolve on the hotspot (the hello usually makes this unnecessary)
     fallback: null
+    fps: 25               # 320x240 at ~20-25 fps: frame rate matters more than detail for blinks
   front:
     source: "http://front-cam.local:81/stream"
+    static_ip: null
     fallback: null
+    fps: 3                # 320x240 stream, analysed 2-5 times a second (YOLO near-work + brightness)
+    still_size: vga       # one /capture?size=vga|svga still, on demand only (for Muse)
   # The rear camera does not stream: it arrives as FPGA events (rear.mode: fpga).
   # For rear.mode: software, add  rear: {source: "<MJPEG URL>"}
+
+discovery:
+  port: 4310              # ESP32s broadcast {"t":"cam_hello","role":...,"ip":...} here every 2 s
 
 stream:
   reconnect_s: 3.0        # retry a dead source this often
@@ -37,18 +45,49 @@ eye:
   calibration_s: 5.0      # record the open-eye baseline this long at start (and on POST /calibrate/eye)
   default_baseline: 1.0   # openness used until calibration finishes (closeup: visible pupil area / full)
   blink_ratio: 0.65       # openness / baseline below this = eye closed (pupil mostly or fully covered)
-  blink_min_frames: 2     # a blink = closed for 2..7 frames (at the eye camera's ~10-20 fps)
-  blink_max_frames: 7
-  blink_min_s: 0.05       # used only when blink_*_frames are null (dev webcam)
-  blink_max_s: 0.5
+  blink_min_s: 0.08       # a blink = eye closed for 80..450 ms, whatever the frame rate
+  blink_max_s: 0.45       # (at 20-25 fps that is 2..11 frames; longer = eyes shut, not a blink)
+  blink_min_frames: null  # set both to count blinks in frames instead of seconds
+  blink_max_frames: null
   presence_s: 2.0         # no pupil for longer than this = eye not in view (not a closed eye)
+  partial_ratio: 0.85     # partial blink: lid dips below this (but not below blink_ratio), blink-length
+  low_blink_per_min: 10   # flag a low-blink stretch: under this rate...
+  low_blink_min_s: 300    # ...for at least 5 minutes
   squint_low: 0.65        # squint = openness / baseline between squint_low and squint_high...
   squint_high: 0.85
   squint_min_s: 1.5       # ...for at least this long
   rate_window_s: 60       # blinks per minute over this window
 
+nearwork:                 # FRONT camera near-work (backend/nearwork.py): YOLO laptop/phone/tv/keyboard/book
+  too_close_cm:           # close-up = nearer than this (per COCO label)
+    cell phone: 30
+    book: 30
+    laptop: 50
+    tv: 50
+    keyboard: 50
+  session_gap_s: 5        # a missed detection shorter than this doesn't split a session
+  switch_s: 5             # another object closer for this long starts a new session
+  min_session_s: 10       # shorter close-ups are glances, not sessions
+
+rings:
+  heads_up_after_s: 20    # no near-work in view this long = heads-up
+  heads_up_goal_min: 180
+  outside_goal_min: 120
+  min_break_s: 60         # heads-up stretches this long earn points
+  points:
+    heads_up_break: 5
+    outside_per_5min: 1
+    ring_complete: 20
+
+outdoor:                  # backend/outdoor.py: brightness = luma / (exposure x gain), from /sensor
+  threshold_log: 0.0      # log10 brightness; set by POST /outdoor/calibrate (indoor + outdoor)
+  hysteresis_log: 0.25
+  hold_s: 60              # sustained this long to switch indoor <-> outdoor
+  sky_boost_log: 0.2      # lower the threshold this much when the top third looks like sky
+  sky_min_fraction: 0.3
+
 distance:
-  method: object          # object: known width of the screen/device in the FRONT frame (the product)
+  method: nearwork        # nearwork: nearest near-work object (the product)
                           # face: DEV ONLY, face width when a webcam looks at you
   device: laptop          # laptop | phone: picks the reference width and the too-close threshold
   too_close_cm:
@@ -73,6 +112,7 @@ gaze:                     # backend/gaze.py: LEFT / CENTER / RIGHT from the pupi
   settle_s: 0.5           # skip the start of each step while the eye moves
   smoothing_s: 0.5        # majority vote over this window
   hysteresis: 0.15        # switch only if clearly closer (fraction of the left-right span)
+  front_mirrored: false   # the FRONT camera faces where the wearer faces (dev webcam: true)
   regions:                # FRONT frame columns per gaze region (0 = left edge, 1 = right), ~15% overlap
     left: [0.0, 0.41]
     center: [0.26, 0.74]
@@ -96,7 +136,7 @@ muse:                     # Meta Muse Spark via the Model API (backend/muse_clie
   lifetime_cap_usd: 10.0  # hard stop: no call once this much is spent (incl. prior_spend_usd)
   daily_cap_usd: 5.0
   max_calls_per_min: 6
-  prior_spend_usd: 0.0016 # two verification calls made before the backend logged usage
+  prior_spend_usd: 0.0033 # calls made before this database (2 key checks + 1 whose log was reset)
   image_max_side: 512     # frames are downscaled + JPEG'd before sending (~300 tokens)
   image_quality: 70
   price_per_mtok:         # Standard tier, from Meta's pricing page

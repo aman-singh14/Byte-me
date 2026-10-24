@@ -10,6 +10,7 @@ import '../net/glasses_link.dart';
 import '../net/protocol.dart';
 import '../social/social_store.dart';
 import '../theme/theme.dart';
+import 'backend_widgets.dart';
 import 'together_screen.dart' show askText;
 
 class SettingsScreen extends StatelessWidget {
@@ -38,6 +39,7 @@ class SettingsScreen extends StatelessWidget {
             title: const Text('Rear camera'),
             subtitle: Text(link.streamUrl?.toString() ?? 'Not found'),
           ),
+          const BackendSettingsTile(),
           ListTile(
             leading: const Icon(Symbols.motion_sensor_active_rounded),
             title: const Text('Reflex camera'),
@@ -72,6 +74,7 @@ class SettingsScreen extends StatelessWidget {
               trailing: const Icon(Symbols.chevron_right_rounded),
               onTap: () => Navigator.of(context).pushNamed(WidgetGallery.route),
             ),
+            const DevOutsideTile(),
           ],
         ],
       ),

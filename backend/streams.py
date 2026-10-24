@@ -25,6 +25,7 @@ import lgmd
 
 SYNTHETIC = "synthetic"
 SYNTHETIC_EYE = "synthetic-eye"      # backend/synth_eye.py: close-up eye with blinks, squint, gaze
+SYNTHETIC_FRONT = "synthetic-front"  # backend/synth_front.py: phone / laptop / heads-up / outdoor loop
 SYNTH_FPS = 15
 STREAM_PREFIXES = ("http://", "https://", "rtsp://")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -80,6 +81,9 @@ class _Capture:
         elif src == SYNTHETIC_EYE:
             from backend.synth_eye import SynthEyeSource
             self.synth = SynthEyeSource(SYNTH_FPS)
+        elif src == SYNTHETIC_FRONT:
+            from backend.synth_front import SynthFrontSource
+            self.synth = SynthFrontSource()
         path = resolve_sample(src)
         self.is_file = isinstance(path, str) and self.synth is None and not is_stream(path) and Path(path).exists()
         if self.synth is not None:
@@ -143,6 +147,7 @@ class FrameReader:
         self._t_frame = 0.0
         self._fps = 0.0
         self._alive = True
+        self._reopen = False
         self._thread = threading.Thread(target=self._run, name=f"reader-{self.name}", daemon=True)
         self._thread.start()
 
@@ -172,6 +177,13 @@ class FrameReader:
             "ok": age is not None and age < self.stale_s,
         }
 
+    def set_source(self, source):
+        """Switch to a new primary source (e.g. the IP a camera just announced)."""
+        source = normalize_source(source)
+        if source != self.source:
+            self.source = source
+            self._reopen = True
+
     def close(self):
         self._alive = False
         self._thread.join(timeout=2.0)
@@ -191,6 +203,12 @@ class FrameReader:
         cap = None
         next_primary_try = 0.0
         while self._alive:
+            if self._reopen:
+                self._reopen = False
+                if cap is not None:
+                    cap.release()
+                cap = None
+                next_primary_try = 0.0
             now = time.monotonic()
             # (Re)open: primary first, fallback while the primary is down.
             if cap is None or (cap.src != self.source and now >= next_primary_try):

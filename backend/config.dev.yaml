@@ -5,8 +5,8 @@
 #
 #   EYE    laptop webcam + MediaPipe face mesh (whole face, not one eye up close)
 #   FRONT  laptop webcam too (shares the reader); distance from your face width.
-#          For "what am I looking at?", point it at a still image instead:
-#          --front sample:bus.jpg   (or any .jpg/.png/.mp4 path)
+#          --front synthetic-front: scripted phone / laptop / heads-up / outdoor loop
+#          --front sample:bus.jpg (or any .jpg/.png/.mp4) for "what am I looking at?"
 #   REAR   FPGA events from tools/mock_fpga.py: run it in another terminal, or pass --mock-fpga
 #          (or --rear-mode software --rear synthetic for the old in-laptop lgmd.py path)
 #
@@ -24,9 +24,15 @@ cameras:
 
 eye:
   method: facemesh        # DEV ONLY stand-in for the close-up eye camera
+  facemesh_eye: left      # measure only the wearer's LEFT eye, like the real eye camera
   default_baseline: 0.28  # typical open-eye EAR
-  blink_min_frames: null  # a 30 fps webcam: time blinks in seconds instead (blink_min_s / blink_max_s)
-  blink_max_frames: null
+
+gaze:
+  front_mirrored: true    # the webcam faces you: its picture is a mirror image of your view
+  default_centroids:      # uncalibrated: a webcam facing you sees your iris move to the
+    left: [0.25, 0.0]     # picture's right when you look left (the real eye camera's
+    center: [0.0, 0.0]    # direction depends on its mount: calibrate on the glasses)
+    right: [-0.25, 0.0]
 
 distance:
   method: face            # DEV ONLY: the webcam looks at you, not at a screen

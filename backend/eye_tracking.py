@@ -62,26 +62,39 @@ def iris_offset(pts, idx, iris):
 
 
 class FaceMeshEyes:
-    """DEV ONLY: whole face in view on a laptop webcam. Openness = mean EAR of both eyes.
-    The product's eye camera sees one eye up close; that is CloseupEye."""
+    """DEV ONLY: whole face in view on a laptop webcam. The product's eye camera sees one
+    eye up close; that is CloseupEye.
+
+    eye: "left" or "right" (the WEARER's) measures only that eye, like the real eye
+    camera does; "both" averages them. Openness = Eye Aspect Ratio."""
 
     name = "facemesh"
+    EYES = {"left": (LEFT_EYE, LEFT_IRIS), "right": (RIGHT_EYE, RIGHT_IRIS)}
 
-    def __init__(self, face_mesh=None):
+    def __init__(self, face_mesh=None, eye="both"):
         from backend.face import FaceMesh
+        if eye not in ("left", "right", "both"):
+            raise ValueError("eye must be left, right or both")
         self.mesh = face_mesh or FaceMesh()
+        self.eye = eye
         self.last_landmarks = None   # distance.py can reuse these
+
+    @property
+    def irises(self):
+        """How many iris points end the drawn point list (for the red crosses)."""
+        return 2 if self.eye == "both" else 1
 
     def extract(self, frame):
         pts = self.mesh.detect(frame)
         self.last_landmarks = pts
         if pts is None:
             return None
-        e = (ear(pts, RIGHT_EYE) + ear(pts, LEFT_EYE)) / 2
-        rx, ry = iris_offset(pts, RIGHT_EYE, RIGHT_IRIS)
-        lx, ly = iris_offset(pts, LEFT_EYE, LEFT_IRIS)
-        draw = pts[list(RIGHT_EYE + LEFT_EYE) + [RIGHT_IRIS, LEFT_IRIS]]
-        return EyeFeatures(e, ((rx + lx) / 2, (ry + ly) / 2), draw)
+        chosen = list(self.EYES.values()) if self.eye == "both" else [self.EYES[self.eye]]
+        e = sum(ear(pts, idx) for idx, _ in chosen) / len(chosen)
+        offs = [iris_offset(pts, idx, iris) for idx, iris in chosen]
+        pupil = (sum(o[0] for o in offs) / len(offs), sum(o[1] for o in offs) / len(offs))
+        draw = pts[[i for idx, _ in chosen for i in idx] + [iris for _, iris in chosen]]
+        return EyeFeatures(e, pupil, draw)
 
 
 class CloseupEye:
@@ -211,7 +224,8 @@ class BlinkSquintDetector:
 
     def __init__(self, calibration_s=5.0, default_baseline=0.28, blink_ratio=0.65,
                  blink_min_s=0.05, blink_max_s=0.5, blink_min_frames=None, blink_max_frames=None,
-                 squint_low=0.65, squint_high=0.85, squint_min_s=1.5, rate_window_s=60, **_ignored):
+                 squint_low=0.65, squint_high=0.85, squint_min_s=1.5, rate_window_s=60,
+                 partial_ratio=0.85, **_ignored):
         self.calibration_s = calibration_s
         self.baseline = default_baseline
         self.blink_ratio = blink_ratio
@@ -220,6 +234,12 @@ class BlinkSquintDetector:
         # otherwise blinks are timed in seconds (dev webcam at 30 fps).
         self.blink_min_frames, self.blink_max_frames = blink_min_frames, blink_max_frames
         self._closed_frames = 0
+        # Partial blink: the lid dips below partial_ratio but never reaches blink_ratio,
+        # with blink-like timing (an incomplete blink, which leaves the eye drier).
+        self.partial_ratio = partial_ratio
+        self._dip_since = None
+        self._dip_min = None
+        self.partial_blinks = 0
         self.squint_low, self.squint_high, self.squint_min_s = squint_low, squint_high, squint_min_s
         self.rate_window_s = rate_window_s
         self.calibrated = False
@@ -292,6 +312,18 @@ class BlinkSquintDetector:
                 self.total_blinks += 1
                 events.append(("blink", dur))
 
+        if ratio < self.partial_ratio:
+            if self._dip_since is None:
+                self._dip_since, self._dip_min = t, ratio
+            self._dip_min = min(self._dip_min, ratio)
+        elif self._dip_since is not None:
+            dur, low = t - self._dip_since, self._dip_min
+            self._dip_since = self._dip_min = None
+            if (low >= self.blink_ratio and self.blink_min_s <= dur <= self.blink_max_s
+                    and not self.squinting and not self.calibrating):
+                self.partial_blinks += 1
+                events.append(("partial_blink", dur))
+
         if self.calibrating:            # the baseline is a guess until calibrated: no squint calls
             return self._end_squint(t, events)
         if self.squint_low <= ratio < self.squint_high:
@@ -323,13 +355,54 @@ class BlinkSquintDetector:
         return len(self.blinks) * 60.0 / span
 
 
+class LowBlinkMonitor:
+    """Flags long stretches of low blinking: rate < `below` blinks/min for >= `min_s`
+    (default 5 min) while the eye is in view. Ends when the rate is back above
+    `below + 1` or the eye has been out of view for `absent_s`."""
+
+    def __init__(self, below=10.0, min_s=300.0, absent_s=30.0):
+        self.below, self.min_s, self.absent_s = below, min_s, absent_s
+        self.since = None            # first moment of the current low stretch
+        self.active = False
+        self._absent_since = None
+
+    def update(self, t, rate, present):
+        """Returns ("low_blink_start", since) / ("low_blink_end", {"start", "end"}) / None."""
+        if not present:
+            if self._absent_since is None:
+                self._absent_since = t
+            if t - self._absent_since >= self.absent_s:
+                return self._end(self._absent_since)
+            return None
+        self._absent_since = None
+        if rate is None:
+            return None
+        if rate < self.below:
+            if self.since is None:
+                self.since = t
+            if not self.active and t - self.since >= self.min_s:
+                self.active = True
+                return ("low_blink_start", self.since)
+        elif rate >= self.below + 1:
+            return self._end(t)
+        return None
+
+    def _end(self, t):
+        was, since = self.active, self.since
+        self.active, self.since = False, None
+        if was:
+            return ("low_blink_end", {"start": since, "end": t})
+        return None
+
+
 class EyeTracker:
     """Extractor + detector. process(frame, t) -> (state dict, events)."""
 
     def __init__(self, cfg, extractor=None):
         e = cfg.get("eye", {})
         if extractor is None:
-            extractor = FaceMeshEyes() if e.get("method") == "facemesh" else CloseupEye()
+            extractor = (FaceMeshEyes(eye=e.get("facemesh_eye", "both")) if e.get("method") == "facemesh"
+                         else CloseupEye())
         self.extractor = extractor
         self.detector = BlinkSquintDetector(**e)
         self.presence_s = e.get("presence_s", 2.0)
@@ -361,6 +434,7 @@ class EyeTracker:
             "calibrated": d.calibrated,
             "calibrating": d.calibrating,
             "blinks_total": d.total_blinks,
+            "partial_blinks": d.partial_blinks,
             "blink_rate": None if rate is None else round(rate, 1),
             "squinting": d.squinting,
             "pupil": None if f is None or f.pupil is None else [round(v, 3) for v in f.pupil],
@@ -373,8 +447,19 @@ class EyeTracker:
         if f is not None and f.points is not None:
             for x, y in f.points.astype(int):
                 cv2.circle(img, (int(x), int(y)), 1, (0, 255, 255), -1)
+        # Red cross = the pupil centre that was found. Close-up method: "pupil" is a position in
+        # the frame. Face-mesh (dev) method: "pupil" is the iris position inside the eye, so mark
+        # the two iris-centre landmarks (the last two points) instead.
+        if isinstance(self.extractor, FaceMeshEyes):
+            if f is not None and f.points is not None:
+                for x, y in f.points[-self.extractor.irises:].astype(int):
+                    cv2.drawMarker(img, (int(x), int(y)), (0, 0, 255), cv2.MARKER_CROSS, 12, 2)
+        elif s.get("pupil"):
+            h, w = img.shape[:2]
+            cx, cy = int((s["pupil"][0] + 1) * w / 2), int((s["pupil"][1] + 1) * h / 2)
+            cv2.drawMarker(img, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 14, 2)
         lines = [
-            f"EAR {s.get('openness')}  ratio {s.get('openness_ratio')}  base {s.get('baseline')}",
+            f"openness {s.get('openness')}  ratio {s.get('openness_ratio')}  base {s.get('baseline')}",
             f"blinks {s.get('blinks_total')}  rate {s.get('blink_rate')}/min",
             f"squint {'YES' if s.get('squinting') else 'no'}  pupil {s.get('pupil')}",
         ]
@@ -385,6 +470,59 @@ class EyeTracker:
         return img
 
 
+def _shrink(img, width=320):
+    """The real eye camera streams 320 px wide; test photos/videos are much bigger."""
+    h, w = img.shape[:2]
+    return img if w <= width else cv2.resize(img, (width, int(h * width / w)), interpolation=cv2.INTER_AREA)
+
+
+def analyze_clip(tracker, path, save=None):
+    """Run the tracker over a recorded video and print what it found. save: annotated .mp4."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise SystemExit(f"cannot open {path}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    writer, n, seen, opens, pupils, events = None, 0, 0, [], [], []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        frame = _shrink(frame)
+        state, evs = tracker.process(frame, n / fps)
+        events += [(round(n / fps, 2), e[0]) for e in evs if e[0] != "calibrated"]
+        seen += state["eye_detected"]
+        if state["openness"] is not None:
+            opens.append(state["openness"])
+        if state["pupil"]:
+            pupils.append(state["pupil"])
+        if save:
+            out = tracker.annotate(frame.copy())
+            if writer is None:
+                writer = cv2.VideoWriter(save, cv2.VideoWriter_fourcc(*"mp4v"), fps, (out.shape[1], out.shape[0]))
+            writer.write(out)
+        n += 1
+    cap.release()
+    if writer:
+        writer.release()
+    if n == 0:
+        raise SystemExit("no frames in the video")
+    d, st = tracker.detector, tracker.state
+    px = [p[0] for p in pupils]
+    print(f"{path}: {n} frames, {n / fps:.1f} s at {fps:.0f} fps")
+    print(f"  pupil found in {100 * len(pupils) / n:.0f}% of frames, eye 'present' in {100 * seen / n:.0f}%")
+    print(f"  calibrated: {d.calibrated} (baseline {d.baseline:.2f})")
+    print(f"  blinks: {d.total_blinks}   partial blinks: {d.partial_blinks}   "
+          f"squints: {sum(1 for _, k in events if k == 'squint_start')}")
+    if px:
+        print(f"  pupil x range: {min(px):+.2f} .. {max(px):+.2f} (left/right movement)")
+    if opens:
+        o = sorted(opens)
+        print(f"  openness: min {o[0]:.2f}, median {o[len(o) // 2]:.2f}, max {o[-1]:.2f}")
+    print("  events:", ", ".join(f"{t}s {k}" for t, k in events) or "none")
+    if save:
+        print(f"  annotated video: {save}")
+
+
 def main(argv=None):
     from backend.config import load_config
     from backend.streams import FrameReader
@@ -393,7 +531,9 @@ def main(argv=None):
     ap.add_argument("--source", default=None, help="camera source (default: cameras.eye in config)")
     ap.add_argument("--method", choices=("closeup", "facemesh"), default=None, help="facemesh is DEV ONLY")
     ap.add_argument("--dev", action="store_true", help="use config.dev.yaml stand-ins (webcam + face mesh)")
-    ap.add_argument("--image", help="run once on a still image and print the features")
+    ap.add_argument("--image", help="run once on a still photo and print what was found")
+    ap.add_argument("--analyze", metavar="VIDEO", help="process a recorded eye video and print a summary")
+    ap.add_argument("--save", metavar="FILE", help="with --image: save the annotated photo; with --analyze: .mp4")
     args = ap.parse_args(argv)
     cfg = load_config(dev=args.dev)
     if args.method:
@@ -402,8 +542,17 @@ def main(argv=None):
 
     if args.image:
         img = cv2.imread(args.image)
+        if img is None:
+            raise SystemExit(f"cannot read {args.image}")
+        img = _shrink(img)
         state, _ = tracker.process(img, time.time())
-        print(state)
+        print({k: state[k] for k in ("eye_detected", "openness", "pupil", "method")})
+        if args.save:
+            cv2.imwrite(args.save, tracker.annotate(img.copy()))
+            print("annotated photo:", args.save)
+        return
+    if args.analyze:
+        analyze_clip(tracker, args.analyze, args.save)
         return
 
     reader = FrameReader(args.source if args.source is not None else cfg["cameras"]["eye"]["source"])

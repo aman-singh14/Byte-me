@@ -113,8 +113,13 @@ class AppBridge:
                     self._send(self.cam_sock, {"t": "hello", "id": "camA"})
                 next_hello = now + 2.0
             live = self.get_live()
-            if live.get("distance_cm") is not None:
-                last_dist = round(live["distance_cm"])
+            # "dist" = distance to what the wearer is looking at: the nearest phone / screen /
+            # book from the FRONT camera (the dev face-width estimate only if there is none).
+            dist = live.get("nearwork_distance_cm")
+            if dist is None:
+                dist = live.get("distance_cm")
+            if dist is not None:
+                last_dist = round(dist)
             blink, self._blink_pending = self._blink_pending, False
             self._send(self.frame_sock, {"t": "sens", "dist": last_dist, "blink": int(blink),
                                          "yaw_rate": 0, "lux": int(live.get("lux_est") or 0)})

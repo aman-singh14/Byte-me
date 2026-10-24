@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'alerts/alert_service.dart';
 import 'alerts/voice.dart';
 import 'app.dart';
+import 'net/backend_link.dart';
+import 'net/backend_rings.dart';
 import 'net/glasses_link.dart';
 import 'social/rings_source.dart';
 import 'social/side_quests.dart';
@@ -20,8 +22,12 @@ void main() {
   final vision = RearVision(link, YoloDetector());
   final alerts = AlertService(link, vision, namer: CamBFireNamer(link, YoloDetector()));
   alerts.start();
-  // Stand-in until the rings code lands; it implements RingsSource too.
-  final rings = StandInRings(link.sens);
+  // Eye, close-up and ring data from the laptop backend; its address comes from Settings
+  // or from the laptop's UDP hello on the glasses link.
+  final backend = BackendLink();
+  backend.start(glasses: link).catchError((Object e) => debugPrint('BackendLink could not start: $e'));
+  // Real rings from the backend; the sensor stand-in fills in while it isn't answering.
+  final rings = BackendRings(backend, StandInRings(link.sens));
   late final SideQuestStore quests;
   final social = SocialStore(link: link, rings: rings, questStars: () => quests.starsByQuest)..start();
   final together = TogetherTime(social: social, radio: BleNearbyRadio())..start();
@@ -37,6 +43,7 @@ void main() {
         ChangeNotifierProvider.value(value: social),
         ChangeNotifierProvider.value(value: quests),
         ChangeNotifierProvider.value(value: together),
+        ChangeNotifierProvider.value(value: backend),
       ],
       child: const OmniApp(),
     ),
