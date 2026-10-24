@@ -1,9 +1,15 @@
 # Mega Glasses backend
 
-Eye camera → blinks, squints, pupil. Front camera → distance to the screen. Rear
-camera → LGMD (`../lgmd.py`, unchanged) → spoken warning. Everything is stored in
-SQLite and served by FastAPI, with a web dashboard at `/` and Aman's app fed live
-data over its own UDP protocol.
+The glasses have three cameras, and all the processing happens here, on the laptop:
+
+| Camera | Hardware | Backend does |
+|---|---|---|
+| EYE | ESP32-CAM ~3 cm from one eye, MJPEG over Wi-Fi | close-up pupil tracking → blinks, squints, gaze |
+| FRONT | ESP32-CAM looking outward, MJPEG over Wi-Fi | distance to the screen/phone, "what am I looking at?" |
+| REAR | OV2640 on the FPGA, which runs LGMD in hardware | receives EVENT + last 3 s of video, classifies, warns |
+
+The ESP32s only stream video. Results are stored in SQLite and served by FastAPI:
+a web dashboard at `/`, and Aman's app fed live over its own UDP protocol.
 
 ## Setup
 
@@ -12,30 +18,51 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Python 3.11+. On macOS, give the terminal camera access (System Settings → Privacy &
-Security → Camera). The first run downloads MediaPipe's face model (3.7 MB) to
-`backend/models/`.
+Python 3.11+. The first run downloads MediaPipe's face model (3.7 MB, dev mode only)
+to `backend/models/`; YOLO's `yolov8n.pt` (6 MB) goes there too.
 
-## Run the demo (webcam, no hardware)
+## Run the product
 
-From the repo root:
+All three cameras on the phone hotspot (see `../firmware/esp32cam/README.md`), then from the repo root:
 
 ```bash
-.venv/bin/python -m backend.main --preview
+.venv/bin/python -m backend.main
 ```
+
+Camera URLs are in `config.yaml` (`http://eye-cam.local:81/stream`,
+`http://front-cam.local:81/stream`). If a stream is down there is no fallback: the
+dashboard shows **"EYE camera offline"** / **"FRONT camera offline"** and the backend
+retries every 3 s.
 
 - Dashboard: <http://localhost:8000/> (on a phone on the same hotspot:
   `http://<laptop-ip>:8000/`). API docs: <http://localhost:8000/docs>.
-- `--preview` opens annotated camera windows (`c` recalibrates the eyes, `q` quits).
-- The first 5 s with your face in view are eye calibration: keep your eyes open and
-  look at the screen. Then sit at a known distance (say 50 cm) and press
-  *Calibrate distance…* in the dashboard.
-- The rear camera defaults to `synthetic` (lgmd.py's looming square), so you hear
-  "Object approaching from behind" every ~5 s. Set `cameras.rear.source: 0` to try it
-  on the webcam (walk toward it fast), or pass `--speech print` for silence.
+- The first 5 s with the eye in view are eye calibration: keep the eye open and look
+  ahead normally. For distance, sit at a known distance from the screen (say 50 cm)
+  and press *Calibrate distance…*.
 
-Useful overrides: `--eye 1 --front 0 --rear http://rear-cam.local:81/stream`,
-`--port 8001`, `--phone 172.20.10.1`, `--speech print`.
+Useful overrides: `--eye <url> --front <url>`, `--port 8001`, `--phone 172.20.10.1`,
+`--speech print` (silence), `--preview` (annotated camera windows).
+
+## Dev mode (no hardware)
+
+Until the ESP32-CAMs and the FPGA arrive, `--dev` merges `config.dev.yaml` on top of
+`config.yaml` and swaps in **stand-ins that are not part of the product**:
+
+| Product | Dev stand-in |
+|---|---|
+| EYE camera + close-up pupil tracking | laptop webcam + MediaPipe face mesh (whole face) |
+| FRONT camera + screen-width distance | the same webcam + face-width distance, or a still image (`--front sample:bus.jpg`, any .jpg/.png/.mp4) |
+| REAR FPGA events | lgmd.py in software on a synthetic looming square (`rear.mode: software`); later `tools/mock_fpga.py` |
+
+```bash
+.venv/bin/python -m backend.main --dev --preview
+.venv/bin/python -m backend.main --dev --front sample:bus.jpg    # a street scene as the forward view
+```
+
+On macOS, give the terminal camera access (System Settings → Privacy & Security →
+Camera). The synthetic rear says "Object approaching from behind" every ~5 s
+(`--speech print` for silence). `mock_glasses.py` can also stand in for an ESP32 over
+the network: run it and use `http://localhost:81/stream` as a source.
 
 Demo history for the pitch (fake data, kept in a separate file):
 
@@ -49,32 +76,16 @@ Demo history for the pitch (fake data, kept in a separate file):
 The backend speaks `mobile-app/lib/net/protocol.dart` (it pretends to be the
 "frame" device, like `mock_glasses.py`). Run **either** the backend **or**
 `mock_glasses.py`, since they share ports. Real distance and blinks go out in
-`sens`, and rear alerts go out as `fire`. The rear camera is served at `:81/stream`
-for the app's rear view. Set `app_bridge.phone_ip` (`127.0.0.1` for the iOS simulator,
-`172.20.10.1` for a real iPhone on its own hotspot).
-
-## When the ESP32-CAMs arrive
-
-Only `config.yaml` changes. See `../firmware/esp32cam/README.md`:
-
-```yaml
-cameras:
-  front: {source: "http://front-cam.local:81/stream", fallback: 0}
-  eye:   {source: "http://eye-cam.local:81/stream"}
-  rear:  {source: "http://rear-cam.local:81/stream", fallback: synthetic}
-eye:      {method: closeup}   # camera ~3 cm from one eye: dark-pupil ellipse fit
-distance: {method: object}    # front camera sees the screen: bright-rectangle width
-```
-
-A dead stream switches to its `fallback` and the primary is retried every 3 s.
+`sens`, and rear alerts go out as `fire`. Set `app_bridge.phone_ip` (`127.0.0.1` for
+the iOS simulator, `172.20.10.1` for a real iPhone on its own hotspot).
 
 ## Run pieces on their own
 
 ```bash
-python -m backend.streams --config            # show every configured camera
-python -m backend.eye_tracking                 # blink/squint/pupil window
-python -m backend.distance                     # distance window, [k] calibrates at 50 cm
-python -m backend.rear_alert --source 0        # LGMD + speech on the webcam
+python -m backend.streams --config            # show every configured camera (--dev for stand-ins)
+python -m backend.eye_tracking                 # EYE camera: blink/squint/pupil window (--dev: webcam)
+python -m backend.distance                     # FRONT camera: distance, [k] calibrates at 50 cm (--dev: webcam)
+python -m backend.rear_alert                   # rear.mode software: LGMD + speech on the synthetic clip
 python -m backend.facetime status              # OBS scene (docs/facetime.md)
 python -m unittest discover -s backend/tests -t .
 ```
@@ -122,10 +133,11 @@ CORS is open (`*`) so the Flutter app can call it from a phone.
 
 ## Known limits
 
-- Eye tracking was checked on a still portrait and synthetic signals, not yet on a
-  real blinking face or the real eye camera. `CloseupEye` has only been tested on a
-  synthetic eye drawing, so tune `dark_offset` on the first real footage.
-- Face-width distance assumes a 14 cm face. Calibration fixes the scale for one person.
+- The close-up eye method (the product's) has only been tested on synthetic eye
+  images; tune it on the first real eye-camera footage. The dev face-mesh method was
+  checked on a webcam and a still portrait.
+- Screen-width distance assumes a 30 cm laptop screen / 7 cm phone; calibrate once at a
+  known distance. (The dev face-width method assumes a 14 cm face.)
 - The LGMD defaults are untuned on real footage (see the root README).
 - Blink rate ignores blinks that last longer than 0.5 s, and frame-based timing gets
   coarser at ESP32 frame rates (~10-15 fps).

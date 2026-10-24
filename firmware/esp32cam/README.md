@@ -1,6 +1,7 @@
-# ESP32-CAM firmware (front / eye / rear)
+# ESP32-CAM firmware (eye / front)
 
-One sketch for all three AI-Thinker ESP32-CAM boards. Each one serves:
+One sketch for the EYE and FRONT AI-Thinker ESP32-CAM boards. It only streams video
+(no processing on the board). Each one serves:
 
 | URL | What |
 |---|---|
@@ -8,7 +9,9 @@ One sketch for all three AI-Thinker ESP32-CAM boards. Each one serves:
 | `http://<name>-cam.local/capture` | one JPEG |
 | `http://<name>-cam.local/status` | JSON: IP, RSSI, uptime, frames sent, free heap |
 
-`<name>` is `DEVICE_NAME` in `esp32cam.ino`: `front`, `eye` or `rear`.
+`<name>` is `DEVICE_NAME` in `esp32cam.ino`: `eye` or `front`. (`rear` also works if
+you ever stream a rear ESP32-CAM for `rear.mode: software`; the product's rear camera
+is on the FPGA.)
 
 > Not compiled yet: no Arduino toolchain on the machine where it was written. It
 > sticks to the standard `esp32-camera` / `esp_http_server` API that the stock
@@ -55,14 +58,13 @@ Edit `backend/config.yaml`. Nothing else changes:
 
 ```yaml
 cameras:
-  front: {source: "http://front-cam.local:81/stream", fallback: 0}
-  eye:   {source: "http://eye-cam.local:81/stream",   fallback: null}
-  rear:  {source: "http://rear-cam.local:81/stream",  fallback: synthetic}
-eye:
-  method: closeup          # the eye camera sits ~3 cm from one eye
-distance:
-  method: object           # the front camera sees the screen, not your face
+  eye:   {source: "http://eye-cam.local:81/stream"}
+  front: {source: "http://front-cam.local:81/stream"}
 ```
+
+These are already the defaults. The ESP32s only stream; all processing happens in the
+backend. The rear camera is not an ESP32-CAM stream: it is the OV2640 on the FPGA,
+which sends events (`docs/rear_event_protocol.md`).
 
 If `.local` names don't resolve on the hotspot (mDNS is sometimes flaky on iPhone
 hotspots), use the IP from the Serial Monitor. Check a stream in a browser first:
@@ -79,5 +81,5 @@ hotspots), use the IP from the Serial Monitor. Check a stream in a browser first
 | Upload fails: `Failed to connect` | GPIO0 not grounded, or TX/RX swapped |
 | Image upside down in the mount | `FLIP_VERTICAL 1` (and/or `MIRROR 1`) |
 
-The rear LGMD only uses 80x60 pixels, so `FRAMESIZE_QVGA` is plenty for `rear` and
-saves bandwidth for the other two.
+`FRAMESIZE_VGA` (640x480) is a good default for both. Drop to `FRAMESIZE_QVGA` if the
+hotspot struggles.
