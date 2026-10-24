@@ -1,4 +1,4 @@
-# Mega Glasses backend
+# Backend
 
 The glasses have three cameras, and all the processing happens here, on the laptop:
 

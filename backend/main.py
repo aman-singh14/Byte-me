@@ -300,7 +300,7 @@ def main(argv=None):
 
     from backend.api import create_app
 
-    ap = argparse.ArgumentParser(description="Mega Glasses backend: pipelines + API")
+    ap = argparse.ArgumentParser(description="Glasses backend: pipelines + API")
     ap.add_argument("--config", default=None, help="config file (default backend/config.yaml)")
     ap.add_argument("--dev", action="store_true",
                     help="dev mode: merge backend/config.dev.yaml (webcam / still image / synthetic stand-ins)")

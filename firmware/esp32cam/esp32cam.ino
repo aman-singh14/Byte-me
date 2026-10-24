@@ -1,4 +1,4 @@
-// Mega Glasses camera firmware for the AI-Thinker ESP32-CAM (OV2640).
+// Camera firmware for the AI-Thinker ESP32-CAM (OV2640).
 //
 // Trimmed-down CameraWebServer: MJPEG on http://<name>.local:81/stream, a single
 // JPEG on http://<name>.local/capture, and JSON on /status. The backend reads the
@@ -189,7 +189,7 @@ void setup() {
   pinMode(LED_GPIO_NUM, OUTPUT);
   pinMode(FLASH_GPIO_NUM, OUTPUT);
   digitalWrite(FLASH_GPIO_NUM, LOW);
-  Serial.printf("\nMega Glasses camera '%s'\n", DEVICE_NAME);
+  Serial.printf("\ncamera '%s'\n", DEVICE_NAME);
   if (!init_camera()) {
     delay(3000);
     ESP.restart();

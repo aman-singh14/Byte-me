@@ -1,4 +1,4 @@
-# Mega Glasses backend config: THE PRODUCT.
+# Backend config: THE PRODUCT.
 #
 #   EYE    ESP32-CAM ~3 cm from one eye, MJPEG over Wi-Fi   -> close-up pupil tracking
 #   FRONT  ESP32-CAM looking outward, MJPEG over Wi-Fi      -> distance to screen, "what am I looking at?"

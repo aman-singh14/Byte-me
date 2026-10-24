@@ -77,7 +77,7 @@ class GazeRegions(BaseModel):
 
 
 def create_app(rt):
-    app = FastAPI(title="Mega Glasses", version="0.1")
+    app = FastAPI(title="Glasses backend", version="0.1")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     facetime = FaceTimeSwitch(rt.cfg)
 
