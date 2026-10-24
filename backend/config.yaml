@@ -62,11 +62,31 @@ distance:
   hfov_deg: 65            # front camera horizontal field of view, used until calibrated
   smoothing: 0.3          # exponential smoothing factor for the cm value (1 = none)
 
+speech:                   # everything the glasses say (backend/speech.py)
+  laptop: auto            # auto (macOS say -> Bluetooth earbuds/speaker), say, pyttsx3, print (silent), off
+  browser: true           # also send "speak" events so the dashboard/app speaks on the phone
+  rate: null              # words per minute for `say` (null = default)
+  esp32: false            # future MAX98357A I2S speaker on an ESP32 (not built)
+
+gaze:                     # backend/gaze.py: LEFT / CENTER / RIGHT from the pupil
+  calibration_step_s: 3.0 # "look left / straight ahead / right", this long each
+  settle_s: 0.5           # skip the start of each step while the eye moves
+  smoothing_s: 0.5        # majority vote over this window
+  hysteresis: 0.15        # switch only if clearly closer (fraction of the left-right span)
+  regions:                # FRONT frame columns per gaze region (0 = left edge, 1 = right), ~15% overlap
+    left: [0.0, 0.41]
+    center: [0.26, 0.74]
+    right: [0.59, 1.0]
+  default_centroids:      # pupil (x, y) per region until calibrated (sign depends on the camera mount)
+    left: [-0.25, 0.0]
+    center: [0.0, 0.0]
+    right: [0.25, 0.0]
+
 rear:
   mode: fpga              # fpga: events from the FPGA (the product) | software: lgmd.py on a rear stream
   flip: true              # rear camera: image-left = wearer's right
   cooldown_s: 4.0         # minimum time between spoken warnings
-  speech: auto            # auto (macOS say, else pyttsx3, else print) | say | pyttsx3 | print | off
+  speech: auto            # standalone `python -m backend.rear_alert` only; the backend uses `speech`
   message: "Object approaching from behind"
   lgmd:                   # rear.mode: software only. Same names and defaults as lgmd.py
     p_min: 10

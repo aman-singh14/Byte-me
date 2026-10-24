@@ -24,11 +24,14 @@ from backend.config import load_config
 from backend.db import DB
 from backend.distance import DistanceEstimator
 from backend.eye_tracking import EyeTracker, FaceMeshEyes
+from backend.gaze import GazeTracker
 from backend.rear_alert import RearAlert
+from backend.speech import Voice
 from backend.streams import StreamManager, blank
 
 STORED_EVENTS = {"blink", "squint_start", "squint_end", "too_close_start", "too_close_end",
-                 "alert", "calibrated", "break", "facetime"}
+                 "alert", "calibrated", "break", "facetime", "gaze_calibrated"}
+QUIET_EVENTS = {"blink", "speak"}      # not printed (speak is printed by the voice itself)
 
 
 class Session:
@@ -71,15 +74,19 @@ class Runtime:
         self.session = Session(cfg.get("recommendations", {}).get("break_s", 20))
         self.bridge = None
         self._stop = threading.Event()
+        self.voice = Voice(cfg, emit=self.emit)
 
         self.eye = EyeTracker(cfg)
+        self.gaze = GazeTracker(cfg, say=self.voice.say)
+        self.gaze.on_calibrated = lambda c: self.emit("gaze_calibrated", {k: list(v) for k, v in c.items()})
         eye_reader, front_reader = self.streams.get("eye"), self.streams.get("front")
         self.shared_face = (eye_reader is front_reader and isinstance(self.eye.extractor, FaceMeshEyes)
                             and cfg["distance"].get("method", "face") == "face")
         self.distance = DistanceEstimator(cfg, face_mesh=self.eye.extractor.mesh if self.shared_face else None)
         self.rear_mode = cfg.get("rear", {}).get("mode", "fpga")
         # rear.mode: software runs lgmd.py on a rear stream; fpga mode gets events instead (backend/rear).
-        self.rear = RearAlert(cfg) if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None
+        self.rear = (RearAlert(cfg, speaker=self.voice)
+                     if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None)
         self.camera_state = {}                         # camera name -> "online" | "offline"
 
     # -- state shared with the API --------------------------------------------
@@ -107,7 +114,7 @@ class Runtime:
         with self._lock:
             self._event_id += 1
             self.recent.append((self._event_id, {"id": self._event_id, "ts": t, "kind": kind, "data": data}))
-        if kind != "blink":
+        if kind not in QUIET_EVENTS:
             print(f"[event] {kind} {data if data is not None else ''}\n", end="")   # one write: no interleaving
         if self.bridge:
             if kind == "blink":
@@ -129,6 +136,8 @@ class Runtime:
             else:                        # blink, squint_end
                 data = {"duration_s": round(val, 3)}
             self.emit(kind, data, t)
+        pupil = state.get("pupil")
+        self._update_live(**self.gaze.update(tuple(pupil) if pupil else None, t))
         brk = self.session.update(state["eye_detected"], t)
         if brk:
             self.emit("break", {"duration_s": brk[1]}, t)
@@ -258,7 +267,7 @@ def main(argv=None):
     ap.add_argument("--port", type=int, help="override api.port")
     ap.add_argument("--phone", help="override app_bridge.phone_ip")
     ap.add_argument("--speech", choices=("auto", "say", "pyttsx3", "print", "off"),
-                    help="override rear.speech (print = no sound)")
+                    help="override speech.laptop (print = no sound on the laptop)")
     ap.add_argument("--preview", action="store_true", help="show annotated camera windows")
     args = ap.parse_args(argv)
 
@@ -281,6 +290,7 @@ def main(argv=None):
     if args.phone:
         cfg["app_bridge"]["phone_ip"] = args.phone
     if args.speech:
+        cfg.setdefault("speech", {})["laptop"] = args.speech
         cfg["rear"]["speech"] = args.speech
 
     rt = Runtime(cfg).start()

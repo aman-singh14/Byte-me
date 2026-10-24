@@ -13,6 +13,10 @@ same network can call it. Interactive docs at /docs.
     POST /calibrate/eye          record a new open-eye baseline (look at the screen 5 s)
     POST /calibrate/distance     {"known_cm": 50}: stand at a known distance first
     POST /distance/device        {"device": "laptop" | "phone"}
+    GET  /gaze                   current gaze (left/center/right), calibration state, regions
+    POST /gaze/calibrate         {"regions": ["left","center","right"]} (default all three, ~3 s each)
+    POST /gaze/calibrate/cancel
+    PUT  /gaze/regions           {"left": [0, 0.41], "center": [0.26, 0.74], "right": [0.59, 1]}
     GET  /screentime             Mac app usage (real) + iOS usage (mock, labelled)
     GET  /screentime/correlation eye metrics per Mac app and category
     GET  /facetime               current OBS scene
@@ -48,6 +52,16 @@ class Device(BaseModel):
 
 class FaceTimeTarget(BaseModel):
     target: str = "toggle"
+
+
+class GazeCalibration(BaseModel):
+    regions: list[str] = ["left", "center", "right"]
+
+
+class GazeRegions(BaseModel):
+    left: tuple[float, float]
+    center: tuple[float, float]
+    right: tuple[float, float]
 
 
 def create_app(rt):
@@ -133,6 +147,35 @@ def create_app(rt):
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True, "device": body.device, "threshold_cm": rt.distance.threshold_cm}
+
+    @app.get("/gaze")
+    def gaze_get():
+        g = rt.gaze
+        return {**g.state(), "centroids": g.centroids, "regions": g.regions}
+
+    @app.post("/gaze/calibrate")
+    def gaze_calibrate(body: GazeCalibration | None = None):
+        regions = (body or GazeCalibration()).regions
+        bad = [r for r in regions if r not in ("left", "center", "right")]
+        if bad or not regions:
+            raise HTTPException(400, "regions must be left, center and/or right")
+        rt.gaze.start_calibration(regions)
+        return {"ok": True, "steps": regions, "step_s": rt.gaze.step_s,
+                "text": "Follow the spoken prompts: look left, straight ahead, then right."}
+
+    @app.post("/gaze/calibrate/cancel")
+    def gaze_calibrate_cancel():
+        rt.gaze.cancel_calibration()
+        return {"ok": True}
+
+    @app.put("/gaze/regions")
+    def gaze_regions(body: GazeRegions):
+        regions = body.model_dump()
+        for name, (a, b) in regions.items():
+            if not 0 <= a < b <= 1:
+                raise HTTPException(400, f"{name}: need 0 <= start < end <= 1")
+        rt.gaze.regions = {k: tuple(v) for k, v in regions.items()}
+        return {"ok": True, "regions": rt.gaze.regions}
 
     @app.get("/screentime")
     def screentime_usage(range: str = "day"):

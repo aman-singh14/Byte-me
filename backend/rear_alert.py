@@ -136,7 +136,10 @@ class RearAlert:
                 if SIDE_WORDS[side]:
                     text += f", {SIDE_WORDS[side]}"
                 if self.speaker:
-                    self.speaker.say(text)
+                    if getattr(self.speaker, "supports_priority", False):
+                        self.speaker.say(text, "urgent", source="rear")    # interrupts anything else
+                    else:
+                        self.speaker.say(text)
                 events.append(("alert", {"side": side, "k": out.K, "label": label, "text": text}))
         self.state = {
             "k": out.K, "f": out.F, "rise": out.rise, "fire": out.fire,
