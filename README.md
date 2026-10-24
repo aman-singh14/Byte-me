@@ -1,3 +1,9 @@
+> **Mega Glasses (HackTX 2026):** this README documents the LGMD reference model.
+> The full system lives in [`backend/README.md`](backend/README.md) (architecture, how to run,
+> API), with the FPGA side in [`fpga/`](fpga/README.md), the rear event contract in
+> [`docs/rear_event_protocol.md`](docs/rear_event_protocol.md), camera firmware in
+> [`firmware/esp32cam/`](firmware/esp32cam/README.md) and the companion app in `mobile-app/`.
+
 # Byte-me: LGMD collision detector
 
 Python reference model of a locust-inspired collision detector (LGMD, lobula
