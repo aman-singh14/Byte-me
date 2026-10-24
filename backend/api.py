@@ -29,6 +29,7 @@ same network can call it. Interactive docs at /docs.
     GET  /facetime               current OBS scene
     POST /facetime/switch        {"target": "glasses" | "mac" | "toggle"}
     WS   /ws/live                {"type":"live",...} every 0.5 s and {"type":"event",...} as they happen
+    POST /rooms, GET /h/{room}, WS /ws/wearer/{room}, WS /ws/helper/{room}: Call a helper (backend/helper.py)
 """
 
 import asyncio
@@ -41,7 +42,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from backend import screentime
+from backend import helper, screentime
 from backend.db import RANGES
 from backend.facetime import FaceTimeError, FaceTimeSwitch
 from backend.recommendations import recommend
@@ -80,6 +81,7 @@ def create_app(rt):
     app = FastAPI(title="Glasses backend", version="0.1")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     facetime = FaceTimeSwitch(rt.cfg)
+    app.include_router(helper.router(helper.Rooms()))
 
     def check_range(range_name):
         if range_name not in RANGES:

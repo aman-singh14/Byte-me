@@ -79,6 +79,28 @@ The backend speaks `mobile-app/lib/net/protocol.dart` (it pretends to be the
 `sens`, and rear alerts go out as `fire`. Set `app_bridge.phone_ip` (`127.0.0.1` for
 the iOS simulator, `172.20.10.1` for a real iPhone on its own hotspot).
 
+## Call a helper
+
+`backend/helper.py`: rooms, tokens and the video/command relay for the app's
+"Call a helper". It's mounted in the backend (`POST /rooms`, `GET /h/{room}`,
+`WS /ws/wearer/{room}`, `WS /ws/helper/{room}`), and also runs on its own
+(only FastAPI and uvicorn needed, no cameras or models):
+
+```bash
+.venv/bin/python -m backend.helper --port 8020
+```
+
+Rooms are in memory: random 128-bit ids, separate wearer and helper tokens,
+one helper at a time, gone after 30 minutes or when the wearer ends the call.
+Frames are relayed byte for byte, newest only (a slow helper skips frames),
+and never written to disk or logged; the standalone server has no access log
+because URLs carry tokens. The helper page is `static/helper.html` (a bare
+test page for now). Protocol details are at the top of `helper.py`.
+
+```bash
+.venv/bin/python -m unittest -v backend.test_helper   # needs httpx (requirements.txt)
+```
+
 ## Run pieces on their own
 
 ```bash

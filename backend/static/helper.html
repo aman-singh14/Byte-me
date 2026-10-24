@@ -1,0 +1,175 @@
+<!doctype html>
+<!-- Call a helper: bare test page (build step 1). The React page replaces it in
+     step 3. Shows the wearer's live camera and sends guidance. Nothing is recorded:
+     each frame is shown, then its memory is released. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helper · Omni Glasses</title>
+<style>
+  :root { --bg: #FFFBF5; --surface: #FFFFFF; --alt: #F3EEE6; --text: #1C1B1F; --text2: #5D5A63;
+          --brand: #6C4CF1; --urgent: #C62828; --outline: #D9D3CA; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121214; --surface: #1E1E22; --alt: #2A2A30; --text: #F4F2EE; --text2: #B5B1BA;
+            --brand: #A99BFF; --urgent: #FF6B6B; --outline: #3A3A42; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 17px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-weight: 700; }
+  .pill { padding: 4px 12px; border-radius: 999px; background: var(--alt); }
+  .live { background: var(--urgent); color: #fff; }
+  #view { margin-top: 12px; width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 16px;
+          display: grid; place-items: center; overflow: hidden; color: #ccc; }
+  #view img { width: 100%; height: 100%; object-fit: contain; }
+  .row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 700; min-height: 56px; min-width: 56px; padding: 0 20px;
+           border-radius: 16px; border: 2px solid var(--outline); background: var(--surface); color: var(--text);
+           cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .guide button { flex: 1; min-height: 72px; font-size: 20px; }
+  #stop { background: var(--urgent); color: #fff; border-color: var(--urgent); }
+  #feed { margin-top: 12px; padding: 0; list-style: none; }
+  #feed li { padding: 8px 0; border-top: 1px solid var(--outline); }
+  .muted { color: var(--text2); }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <span id="status" class="pill" role="status" aria-live="polite">Connecting…</span>
+    <span id="timer" class="pill" hidden>LIVE 0:00</span>
+    <span id="delay" class="pill muted" hidden></span>
+    <span id="fps" class="pill muted" hidden></span>
+  </div>
+
+  <div id="view" aria-label="Live view from the glasses"><span id="placeholder">Waiting for video…</span></div>
+
+  <div class="row" role="group" aria-label="Camera">
+    <button id="camF" aria-pressed="true">Front camera</button>
+    <button id="camR" aria-pressed="false">Rear camera</button>
+  </div>
+
+  <div class="row guide" role="group" aria-label="Guide the wearer">
+    <button data-dir="L" aria-label="Guide left (Left arrow)">◀ Left</button>
+    <button data-dir="fwd" aria-label="Guide forward (Up arrow)">▲ Forward</button>
+    <button data-dir="R" aria-label="Guide right (Right arrow)">Right ▶</button>
+  </div>
+  <div class="row guide">
+    <button id="stop" data-dir="stop" aria-label="Stop (Space)">STOP</button>
+  </div>
+
+  <div class="row"><button id="end">End call</button></div>
+
+  <h2>Events</h2>
+  <ul id="feed" aria-live="polite"><li class="muted">Nothing yet.</li></ul>
+</main>
+<script>
+  const parts = location.pathname.split('/');
+  const room = parts[parts.length - 1];
+  const token = new URLSearchParams(location.search).get('t') || '';
+  const $ = (id) => document.getElementById(id);
+  let ws, img, liveSince, frames = 0, lastUrl;
+
+  function setStatus(text, live) {
+    $('status').textContent = text;
+    $('status').classList.toggle('live', !!live);
+  }
+
+  function addEvent(text) {
+    const feed = $('feed');
+    if (feed.firstElementChild && feed.firstElementChild.classList.contains('muted')) feed.innerHTML = '';
+    const li = document.createElement('li');
+    li.textContent = new Date().toLocaleTimeString() + ' · ' + text;
+    feed.prepend(li);
+    while (feed.children.length > 30) feed.lastElementChild.remove();
+  }
+
+  function describe(e) {
+    const side = { L: 'left', R: 'right', B: 'behind' }[e.side] || '';
+    if (e.t === 'alert') return `${e.level === 2 ? 'Urgent' : 'Alert'}: ${e.label || 'something'} approaching ${side}`.trim();
+    if (e.t === 'tap') return `Someone ${e.kind || 'tapped'} ${side}`.trim();
+    if (e.t === 'status') return 'Status: ' + JSON.stringify(e);
+    return JSON.stringify(e);
+  }
+
+  function showFrame(buf) {
+    const bytes = new Uint8Array(buf);
+    const cam = String.fromCharCode(bytes[0]);
+    const ts = Number(new DataView(buf).getBigUint64(1));
+    const url = URL.createObjectURL(new Blob([bytes.subarray(9)], { type: 'image/jpeg' }));
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = '';
+      $('view').replaceChildren(img);
+    }
+    img.src = url;
+    if (lastUrl) URL.revokeObjectURL(lastUrl); // nothing kept
+    lastUrl = url;
+    frames++;
+    $('delay').hidden = false;
+    $('delay').textContent = `Delay ~${Math.max(0, Date.now() - ts)} ms`;
+    select(cam);
+  }
+
+  function select(cam) {
+    $('camF').setAttribute('aria-pressed', cam === 'F');
+    $('camR').setAttribute('aria-pressed', cam === 'R');
+  }
+
+  function send(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/helper/${room}?t=${encodeURIComponent(token)}`);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => setStatus('Connected, waiting for the wearer…');
+    ws.onmessage = (m) => {
+      if (m.data instanceof ArrayBuffer) return showFrame(m.data);
+      const e = JSON.parse(m.data);
+      if (e.t === 'wearer') {
+        if (e.on) { liveSince = liveSince || Date.now(); setStatus('LIVE', true); $('timer').hidden = false; }
+        else setStatus('Wearer disconnected, waiting…');
+      } else if (e.t === 'ended') {
+        setStatus('The call has ended.');
+      } else {
+        addEvent(describe(e));
+      }
+    };
+    ws.onclose = (c) => {
+      if (c.code === 4401 || c.code === 4410) setStatus('The call has ended or the link is wrong.');
+      else if (c.code === 4409) setStatus('Someone else is already helping on this link.');
+      else { setStatus('Connection lost, retrying…'); setTimeout(connect, 1500); }
+    };
+  }
+
+  setInterval(() => {
+    if (liveSince) {
+      const s = Math.floor((Date.now() - liveSince) / 1000);
+      $('timer').textContent = `LIVE ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+    $('fps').hidden = false;
+    $('fps').textContent = `${frames} fps`;
+    frames = 0;
+  }, 1000);
+
+  document.querySelectorAll('[data-dir]').forEach((b) =>
+    b.addEventListener('click', () => send({ t: 'guide', dir: b.dataset.dir })));
+  $('camF').onclick = () => send({ t: 'cam', which: 'F' });
+  $('camR').onclick = () => send({ t: 'cam', which: 'R' });
+  $('end').onclick = () => { send({ t: 'end' }); setStatus('Ending…'); };
+  document.addEventListener('keydown', (e) => {
+    const dir = { ArrowLeft: 'L', ArrowUp: 'fwd', ArrowRight: 'R', ' ': 'stop' }[e.key];
+    if (!dir || e.target.tagName === 'INPUT') return;
+    e.preventDefault();
+    send({ t: 'guide', dir });
+  });
+  connect();
+</script>
+</body>
+</html>
