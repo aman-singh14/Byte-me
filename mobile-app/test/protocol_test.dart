@@ -33,6 +33,7 @@ void main() {
     test('hello', () {
       expect((parse('{"t":"hello","id":"frame"}') as HelloMessage).id, DeviceId.frame);
       expect((parse('{"t":"hello","id":"camA"}') as HelloMessage).id, DeviceId.camA);
+      expect((parse('{"t":"hello","id":"camB"}') as HelloMessage).id, DeviceId.camB);
     });
 
     test('bad input returns null instead of throwing', () {
@@ -67,5 +68,9 @@ void main() {
     // Left of the rear camera's image is on the wearer's right.
     expect(wearerSideFromRearImageX(0.1), WearerSide.right);
     expect(wearerSideFromRearImageX(0.9), WearerSide.left);
+    expect(wearerSideFromRearImageX(0.5), WearerSide.behind);
+    expect(wearerSideFromRearImageX(0.36), WearerSide.behind);
+    expect(wearerSideFromRearImageX(0.34), WearerSide.right);
+    expect(const AlertCommand(side: WearerSide.behind, level: 2, label: 'car').toJson()['side'], 'B');
   });
 }

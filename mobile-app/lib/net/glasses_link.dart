@@ -74,8 +74,17 @@ class GlassesLink extends ChangeNotifier {
   DeviceAddress? _camA;
   DeviceAddress? get camA => _camA;
 
+  DeviceAddress? _camB;
+  DeviceAddress? get camB => _camB;
+
   /// MJPEG stream of the rear camera, once Cam A has said hello.
-  Uri? get streamUrl => _camA == null ? null : Uri.parse('http://${_camA!.address.address}:$camStreamPort/stream');
+  Uri? get streamUrl => _stream(_camA);
+
+  /// MJPEG stream of the reflex camera (the FPGA), once Cam B has said hello.
+  Uri? get camBStreamUrl => _stream(_camB);
+
+  static Uri? _stream(DeviceAddress? cam) =>
+      cam == null ? null : Uri.parse('http://${cam.address.address}:$camStreamPort/stream');
 
   int? _battery;
   int? get batteryPercent => _battery;
@@ -139,6 +148,11 @@ class GlassesLink extends ChangeNotifier {
       case HelloMessage(id: DeviceId.camA):
         if (_camA != from) {
           _camA = from;
+          notifyListeners();
+        }
+      case HelloMessage(id: DeviceId.camB):
+        if (_camB != from) {
+          _camB = from;
           notifyListeners();
         }
       case SensMessage():

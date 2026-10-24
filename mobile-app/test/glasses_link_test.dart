@@ -80,7 +80,14 @@ void main() {
     cam.sendTo(link, '{"t":"hello","id":"camA"}');
     await wait(50);
     expect(link.streamUrl.toString(), 'http://127.0.0.1:81/stream');
+    expect(link.camBStreamUrl, isNull);
+
+    final camB = await FakeDevice.bind();
+    camB.sendTo(link, '{"t":"hello","id":"camB"}');
+    await wait(50);
+    expect(link.camBStreamUrl.toString(), 'http://127.0.0.1:81/stream');
     cam.socket.close();
+    camB.socket.close();
   });
 
   test('relays fire events and sends commands to the frame', () async {

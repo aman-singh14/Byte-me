@@ -1,8 +1,9 @@
 // UDP JSON messages between the app and the glasses. Pure Dart, no I/O.
 //
 // One JSON object per datagram. Sides ("L"/"R") are always the WEARER's left
-// and right. The rear camera's image is mirrored relative to the wearer; the
-// only place that flips image sides is [wearerSideFromRearImageX].
+// and right; "B" (app to frame only) is straight behind. The rear camera's
+// image is mirrored relative to the wearer; the only place that flips image
+// sides is [wearerSideFromRearImageX].
 
 import 'dart:convert';
 
@@ -15,7 +16,11 @@ const int camStreamPort = 81;
 
 enum WearerSide {
   left('L'),
-  right('R');
+  right('R'),
+
+  /// Straight behind. Only the app sends it, in "alert", meaning "buzz both
+  /// motors". The frame's own messages ("fire") use L and R.
+  behind('B');
 
   const WearerSide(this.wire);
   final String wire;
@@ -23,14 +28,22 @@ enum WearerSide {
   static WearerSide? fromWire(Object? s) => switch (s) {
     'L' => WearerSide.left,
     'R' => WearerSide.right,
+    'B' => WearerSide.behind,
     _ => null,
   };
 }
 
+/// The middle of the rear image counts as straight behind the wearer: this
+/// share of its width, centered (about 18 degrees of a 60 degree camera).
+const behindZone = 0.3;
+
 /// The rear camera faces backward, so the left of its image is on the
 /// wearer's right. [imageX] is the horizontal position in the image, 0..1
 /// from the image's left edge. This is the only place sides are flipped.
-WearerSide wearerSideFromRearImageX(double imageX) => imageX < 0.5 ? WearerSide.right : WearerSide.left;
+WearerSide wearerSideFromRearImageX(double imageX) {
+  if ((imageX - 0.5).abs() < behindZone / 2) return WearerSide.behind;
+  return imageX < 0.5 ? WearerSide.right : WearerSide.left;
+}
 
 // ---------------------------------------------------------------------------
 // Glasses -> app
@@ -58,7 +71,10 @@ sealed class GlassesMessage {
   }
 }
 
-enum DeviceId { frame, camA }
+/// frame: the frame ESP32. camA: the rear camera the app runs YOLO on.
+/// camB: the FPGA collision reflex camera; its video is used to name what
+/// set off a fire. Both cameras serve MJPEG on [camStreamPort].
+enum DeviceId { frame, camA, camB }
 
 class HelloMessage extends GlassesMessage {
   const HelloMessage(this.id);
@@ -67,6 +83,7 @@ class HelloMessage extends GlassesMessage {
   static HelloMessage? fromJson(Map<String, dynamic> j) => switch (j['id']) {
     'frame' => const HelloMessage(DeviceId.frame),
     'camA' => const HelloMessage(DeviceId.camA),
+    'camB' => const HelloMessage(DeviceId.camB),
     _ => null,
   };
 }
@@ -83,7 +100,7 @@ class SensMessage extends GlassesMessage {
 
   final int distCm; // distance to what the wearer is looking at
   final bool blink; // a blink happened since the last sample
-  final int yawRate; // head turn rate, degrees per second
+  final int yawRate; // head turn rate, degrees per second, positive toward the wearer's left
   final int lux; // ambient light
   final int? batteryPercent; // optional "batt" field, not in the original spec
 
@@ -101,7 +118,8 @@ class SensMessage extends GlassesMessage {
   }
 }
 
-/// Cam B's on-board collision reflex fired. Relayed by the frame ESP32.
+/// Cam B's on-board collision reflex (the FPGA) fired. Relayed by the frame
+/// ESP32.
 class FireMessage extends GlassesMessage {
   const FireMessage({required this.side, required this.k});
   final WearerSide side;
