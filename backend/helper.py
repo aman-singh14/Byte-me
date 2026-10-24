@@ -37,7 +37,8 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 ROOM_TTL_S = 30 * 60
 MAX_FRAME_BYTES = 1024 * 1024
@@ -127,7 +128,8 @@ class Outbox:
 
 
 class Room:
-    def __init__(self, now):
+    def __init__(self, now, wearer_name=None):
+        self.wearer_name = wearer_name
         self.id = secrets.token_hex(16)  # 128 bits
         self.wearer_token = secrets.token_urlsafe(16)
         self.helper_token = secrets.token_urlsafe(16)
@@ -159,9 +161,9 @@ class Rooms:
         self.clock = clock
         self._rooms = {}
 
-    def create(self):
+    def create(self, wearer_name=None):
         self.sweep()
-        room = Room(self.clock())
+        room = Room(self.clock(), wearer_name)
         self._rooms[room.id] = room
         return room
 
@@ -212,12 +214,17 @@ async def _send_loop(ws, outbox):
             await ws.send_text(json.dumps(item))
 
 
+class RoomRequest(BaseModel):
+    wearer_name: str | None = Field(default=None, max_length=80)
+
+
 def router(rooms):
     r = APIRouter()
 
     @r.post("/rooms", status_code=201)
-    def create_room(request: Request):
-        room = rooms.create()
+    def create_room(request: Request, body: RoomRequest | None = None):
+        name = (body.wearer_name or "").strip() if body else ""
+        room = rooms.create(name or None)
         base = str(request.base_url).rstrip("/")
         return {
             "room": room.id,
@@ -226,13 +233,22 @@ def router(rooms):
             "expires_at": room.expires_at,
         }
 
+    @r.get("/room-info/{room_id}")
+    def room_info(room_id: str, t: str = ""):
+        room = rooms.get(room_id)
+        if room is None or not room.token_ok("helper", t):
+            return _message_page("This call has ended", "Ask for a new link.", 404)
+        return JSONResponse({"wearer_name": room.wearer_name, "expires_at": room.expires_at},
+                            headers={"Cache-Control": "no-store"})
+
     @r.get("/h/{room_id}", response_class=HTMLResponse)
     def helper_page(room_id: str, t: str = ""):
         room = rooms.get(room_id)
         if room is None or not room.token_ok("helper", t):
             return _message_page("This call has ended",
                                  "The call is over or the link is incomplete. Ask for a new link.", 404)
-        return PAGE.read_text()
+        return HTMLResponse(PAGE.read_text(), headers={"Cache-Control": "no-store",
+                                                      "Referrer-Policy": "no-referrer"})
 
     async def connect(ws, room_id, role, token):
         """Accepts [ws] as [role] in the room, or closes it and returns None."""
@@ -263,6 +279,10 @@ def router(rooms):
                 if msg["type"] == "websocket.disconnect":
                     break
                 await on_message(msg)
+                if room.ended:
+                    # Drain the final ended/end events before closing the sockets.
+                    await asyncio.wait({sender}, timeout=1)
+                    break
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
@@ -328,8 +348,11 @@ def router(rooms):
                 command = command_from_helper(json.loads(text))
             except ValueError:
                 return
-            if command and room.wearer:
-                room.wearer.put_event(command)
+            if command:
+                if room.wearer:
+                    room.wearer.put_event(command)
+                if command["t"] == "end":
+                    room.end()
 
         try:
             await run(ws, room, outbox, on_message)

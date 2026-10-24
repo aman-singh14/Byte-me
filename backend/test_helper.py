@@ -88,6 +88,25 @@ class RoomsTest(unittest.TestCase):
         self.assertNotEqual(self.room["wearer_token"], self.helper_token)
         self.assertEqual(self.client.get(f"/h/{self.room['room']}?t={self.helper_token}").status_code, 200)
 
+    def test_named_room_metadata_requires_helper_token(self):
+        response = self.client.post('/rooms', json={'wearer_name': '  Aman <test>  '})
+        room = response.json()
+        token = room['helper_url'].split('t=')[1]
+        path = f"/room-info/{room['room']}"
+        info = self.client.get(f"{path}?t={token}")
+        self.assertEqual(info.json()['wearer_name'], 'Aman <test>')
+        self.assertEqual(info.headers['cache-control'], 'no-store')
+        self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.client.get(f"{path}?t={room['wearer_token']}").status_code, 404)
+        self.assertEqual(self.client.post('/rooms', json={'wearer_name': 'x' * 81}).status_code, 422)
+
+    def test_helper_can_end_without_wearer_connected(self):
+        with self.helper() as ws:
+            ws.receive_text()
+            ws.send_json({'t': 'end'})
+            self.assertEqual(ws.receive_json(), {'t': 'ended'})
+        self.assertIsNone(self.rooms.get(self.room['room']))
+
     def test_wrong_tokens_are_refused(self):
         self.assertEqual(self.client.get(f"/h/{self.room['room']}?t=nope").status_code, 404)
         self.assertEqual(self.client.get(f"/h/{self.room['room']}?t={self.room['wearer_token']}").status_code, 404)

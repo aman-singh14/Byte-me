@@ -7,3 +7,5 @@ backend/models/
 firmware/esp32cam/secrets.h
 *.pyc
 .env
+helper-web/node_modules/
+helper-web/coverage/

@@ -284,8 +284,12 @@ tab, and a card on Today).
 - **Alerts** (approach and "someone behind you") are passed on to the helper.
 - Leaving the app while live ends the call; leaving while waiting (to send the
   link) doesn't. Status is spoken, or announced to VoiceOver / TalkBack.
-- Not yet (build steps 3-5): two-way audio (LiveKit), the full helper page,
-  the LIVE LED on the glasses, keep-screen-on.
+- **Helper page:** consent and Join, live video/timer/estimated delay, Front/Rear,
+  large guidance buttons, keyboard shortcuts, and readable alerts. Uses your
+  Together display name if set. Stale video disables movement guidance; Stop
+  stays available while connected. Audio/Mute is marked unavailable for now.
+- Not yet (build steps 4–5): two-way audio (LiveKit), the LIVE LED on the
+  glasses, keep-screen-on.
 
 Run it end to end on one laptop:
 
@@ -294,7 +298,7 @@ Run it end to end on one laptop:
 ```
 
 ```bash
-.venv/bin/python -m backend.helper --port 8020      # helper server (repo root)
+social/.venv/bin/python -m backend.helper --port 8020      # helper server (repo root)
 ```
 
 ```bash

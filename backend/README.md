@@ -87,18 +87,48 @@ the iOS simulator, `172.20.10.1` for a real iPhone on its own hotspot).
 (only FastAPI and uvicorn needed, no cameras or models):
 
 ```bash
-.venv/bin/python -m backend.helper --port 8020
+social/.venv/bin/python -m backend.helper --port 8020
 ```
 
 Rooms are in memory: random 128-bit ids, separate wearer and helper tokens,
 one helper at a time, gone after 30 minutes or when the wearer ends the call.
 Frames are relayed byte for byte, newest only (a slow helper skips frames),
 and never written to disk or logged; the standalone server has no access log
-because URLs carry tokens. The helper page is `static/helper.html` (a bare
-test page for now). Protocol details are at the top of `helper.py`.
+because URLs carry tokens. The helper page is a React + Vite app in
+`../helper-web/`, built into `static/helper.html` as a single self-contained
+file (no CDN or asset server). Protocol details are at the top of `helper.py`.
+
+Build or test the helper page:
 
 ```bash
-.venv/bin/python -m unittest -v backend.test_helper   # needs httpx (requirements.txt)
+cd helper-web  # from the repo root
+npm ci
+npm test
+npm run build
+```
+
+The generated page is checked in, so the Python server needs no Node runtime.
+Open the link shared by the app at `/h/<room>?t=...`. The helper must tap Join
+before the WebSocket opens or video starts. The page includes a live timer,
+estimated delay (phone/browser clock differences affect it), front/rear switching,
+haptic directions (arrow keys, Space to stop), reconnect status, and an event feed.
+Movement directions disable after three seconds without a frame; Stop remains
+available while the wearer is connected. End closes the room even if the wearer
+has disconnected. Mute is disabled until LiveKit audio is implemented.
+
+`POST /rooms` accepts an optional JSON `wearer_name` (up to 80 characters).
+`GET /room-info/<room>?t=...` returns that name and expiry to the helper only;
+page and metadata responses are not cached. Older apps can still create unnamed
+rooms. The app uses the wearer's Together display name when available.
+
+For end-to-end development, run `npm run build` after changes and reload the
+shared helper link on the Python server. For hot reload, start the standalone
+backend on port 8020 and run `npm run dev` in `helper-web/`. Open the shared
+link with its origin changed to Vite's localhost URL (keep `/h/<room>?t=...`).
+Vite proxies room metadata and WebSockets to the backend.
+
+```bash
+PYTHONPATH=. social/.venv/bin/python -m unittest -v backend.test_helper   # needs httpx (requirements.txt)
 ```
 
 ## Run pieces on their own

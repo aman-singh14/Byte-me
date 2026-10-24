@@ -138,6 +138,7 @@ class HelperCall extends ChangeNotifier {
     required this.cameras,
     required Stream<AlertEvent> alerts,
     this.voice,
+    this.wearerName,
     Uri? server,
     http.Client? client,
     Future<HelperSocket> Function(Uri url)? connect,
@@ -155,6 +156,7 @@ class HelperCall extends ChangeNotifier {
   final void Function(GlassesCommand) toGlasses;
   final HelperCameras cameras;
   final Voice? voice;
+  final String? Function()? wearerName;
   final Uri server;
   final http.Client _http;
   final Future<HelperSocket> Function(Uri) _connect;
@@ -212,7 +214,11 @@ class HelperCall extends ChangeNotifier {
     _set(HelperState.starting);
     _error = null;
     try {
-      final r = await _http.post(server.resolve('/rooms')).timeout(const Duration(seconds: 8));
+      final r = await _http.post(
+        server.resolve('/rooms'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'wearer_name': wearerName?.call()}),
+      ).timeout(const Duration(seconds: 8));
       if (r.statusCode != 201) throw HttpException('HTTP ${r.statusCode}');
       final j = jsonDecode(r.body) as Map<String, dynamic>;
       _room = j['room'] as String;

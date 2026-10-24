@@ -28,7 +28,13 @@ void main() {
   final together = TogetherTime(social: social, radio: BleNearbyRadio())..start();
   quests = SideQuestStore(rings: rings, sens: link.sens, together: together)..start();
   final voice = TtsVoice();
-  final helper = HelperCall(toGlasses: link.send, cameras: GlassesCameras(vision), alerts: alerts.events, voice: voice);
+  final helper = HelperCall(
+    toGlasses: link.send,
+    cameras: GlassesCameras(vision),
+    alerts: alerts.events,
+    voice: voice,
+    wearerName: () => social.me?.name,
+  );
   runApp(
     MultiProvider(
       providers: [
