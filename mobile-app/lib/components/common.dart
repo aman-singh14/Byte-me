@@ -14,7 +14,11 @@ enum Direction {
   behind,
   right;
 
-  static Direction fromWearerSide(WearerSide s) => s == WearerSide.left ? left : right;
+  static Direction fromWearerSide(WearerSide s) => switch (s) {
+    WearerSide.left => left,
+    WearerSide.right => right,
+    WearerSide.behind => behind,
+  };
 
   /// One word for indicators: "Left".
   String get word => switch (this) {

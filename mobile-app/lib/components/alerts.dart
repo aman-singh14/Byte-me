@@ -8,10 +8,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../alerts/alert_engine.dart';
 import '../theme/theme.dart';
 import 'common.dart';
 
-enum AlertLevel { gentle, urgent }
+export '../alerts/alert_engine.dart' show AlertLevel;
+
+/// "Car close behind you, left." / "Car behind you, left."
+String alertSentence(AlertLevel level, String label, Direction direction) =>
+    '${capitalize(label)} ${level == AlertLevel.urgent ? 'close ' : ''}${direction.phrase}.';
+
+/// Phone buzz for an alert, matching the glasses: gentle is one pulse,
+/// urgent is three strong ones.
+Future<void> alertHaptic(AlertLevel level) async {
+  if (level == AlertLevel.gentle) return HapticFeedback.mediumImpact();
+  for (var i = 0; i < 3; i++) {
+    if (i > 0) await Future<void>.delayed(const Duration(milliseconds: 150));
+    await HapticFeedback.heavyImpact();
+  }
+}
 
 /// Full-width approach warning: icon + one word + side ("Car · behind left").
 /// Stays until resolved or dismissed.
@@ -36,7 +51,7 @@ class AlertBanner extends StatefulWidget {
   final bool announce;
 
   /// "Car close behind you, left." / "Car behind you, left."
-  String get sentence => '${capitalize(label)} ${level == AlertLevel.urgent ? 'close ' : ''}${direction.phrase}.';
+  String get sentence => alertSentence(level, label, direction);
 
   @override
   State<AlertBanner> createState() => _AlertBannerState();
@@ -50,8 +65,7 @@ class _AlertBannerState extends State<AlertBanner> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         announce(context, widget.sentence, assertive: true);
-        // TODO(phase 1.4): match the glasses' buzz pattern for this level.
-        widget.level == AlertLevel.urgent ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact();
+        alertHaptic(widget.level);
       });
     }
   }

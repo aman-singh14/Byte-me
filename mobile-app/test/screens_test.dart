@@ -1,15 +1,30 @@
 // Every screen and the Widget Gallery lay out without overflow on a small
 // phone, in light and dark, at 100% and 200% text.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omni_glasses/alerts/alert_engine.dart';
+import 'package:omni_glasses/alerts/alert_service.dart';
+import 'package:omni_glasses/alerts/voice.dart';
 import 'package:omni_glasses/app.dart';
+import 'package:omni_glasses/components/alerts.dart';
 import 'package:omni_glasses/gallery/widget_gallery.dart';
 import 'package:omni_glasses/net/glasses_link.dart';
+import 'package:omni_glasses/net/protocol.dart';
 import 'package:omni_glasses/screens/home_shell.dart';
+import 'package:omni_glasses/vision/detector.dart';
+import 'package:omni_glasses/vision/rear_vision.dart';
 import 'package:provider/provider.dart';
 
-Future<void> pumpApp(WidgetTester tester, Widget home, {required Brightness brightness, double textScale = 1}) async {
+Future<AlertService> pumpApp(
+  WidgetTester tester,
+  Widget home, {
+  required Brightness brightness,
+  double textScale = 1,
+  AlertEngine? engine,
+  Voice? voice,
+}) async {
   tester.view.physicalSize = const Size(360 * 3, 740 * 3); // small Android phone
   tester.view.devicePixelRatio = 3;
   tester.platformDispatcher.platformBrightnessTestValue = brightness;
@@ -17,15 +32,36 @@ Future<void> pumpApp(WidgetTester tester, Widget home, {required Brightness brig
   addTearDown(tester.view.reset);
   addTearDown(tester.platformDispatcher.clearAllTestValues);
 
-  final link = GlassesLink(port: 0); // not started: stays "searching"
+  final link = GlassesLink(port: 0); // not started: stays "searching", no camera
+  final vision = RearVision(link, _NoDetector());
+  final alerts = AlertService(link, vision, engine: engine);
+  addTearDown(alerts.dispose);
+  addTearDown(vision.dispose);
   addTearDown(link.dispose);
   await tester.pumpWidget(
-    ChangeNotifierProvider.value(
-      value: link,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: link),
+        ChangeNotifierProvider.value(value: vision),
+        ChangeNotifierProvider.value(value: alerts),
+        Provider<Voice?>.value(value: voice),
+      ],
       child: MaterialApp(theme: omniLightTheme, darkTheme: omniDarkTheme, home: home),
     ),
   );
   await tester.pump(const Duration(milliseconds: 700));
+  return alerts;
+}
+
+/// An engine whose current alert is an urgent reflex fire on the left.
+AlertEngine firing() => AlertEngine()..addFire(DateTime.now(), WearerSide.left);
+
+const _car = Alert(side: WearerSide.left, level: AlertLevel.urgent, label: 'car', source: AlertSource.camera);
+
+class FakeVoice implements Voice {
+  final said = <String>[];
+  @override
+  Future<void> say(String text, {bool interrupt = false}) async => said.add(text);
 }
 
 /// Scrolls the first scrollable to the end so every lazily built item lays out.
@@ -41,6 +77,7 @@ Future<void> scrollThrough(WidgetTester tester) async {
 }
 
 void main() {
+  _announcerTests();
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
       final label = '${brightness.name}, ${(scale * 100).round()}% text';
@@ -55,6 +92,28 @@ void main() {
         }
       });
 
+      testWidgets('tabs lay out with an alert, a notice and a log ($label)', (tester) async {
+        final alerts = await pumpApp(
+          tester,
+          const HomeShell(),
+          brightness: brightness,
+          textScale: scale,
+          engine: firing(),
+        );
+        alerts.handle([
+          const AlertRaised(_car),
+          const AlertCleared(_car, ClearReason.silenced),
+          const PossiblyFollowing(WearerSide.right, Duration(minutes: 3)),
+        ]);
+        await tester.pump(const Duration(milliseconds: 700));
+        for (final tab in ['Aware', 'Eyes', 'Together', 'Today']) {
+          await tester.tap(find.text(tab).last);
+          await tester.pump(const Duration(milliseconds: 700));
+          expect(find.byType(AlertBanner), findsOneWidget, reason: 'banner on $tab');
+          await scrollThrough(tester);
+        }
+      });
+
       testWidgets('Widget Gallery lays out ($label)', (tester) async {
         await pumpApp(tester, const WidgetGallery(), brightness: brightness, textScale: scale);
         await scrollThrough(tester);
@@ -62,4 +121,48 @@ void main() {
       });
     }
   }
+}
+
+void _announcerTests() {
+  testWidgets('speaks one word, buzzes and dismisses', (tester) async {
+    final voice = FakeVoice();
+    final alerts = await pumpApp(
+      tester,
+      const HomeShell(),
+      brightness: Brightness.light,
+      voice: voice,
+      engine: firing(),
+    );
+    alerts.handle([const AlertRaised(_car)]);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(voice.said, ['Car']);
+
+    expect(find.textContaining('Something', findRichText: true), findsOneWidget); // banner for the reflex fire
+    await tester.tap(find.byTooltip('Dismiss alert'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byType(AlertBanner), findsNothing);
+    expect(alerts.log.latest?.ended, ClearReason.dismissed);
+  });
+
+  testWidgets('stays quiet with a screen reader on', (tester) async {
+    final voice = FakeVoice();
+    tester.platformDispatcher.accessibilityFeaturesTestValue = const FakeAccessibilityFeatures(
+      accessibleNavigation: true,
+    );
+    final alerts = await pumpApp(tester, const HomeShell(), brightness: Brightness.light, voice: voice);
+    alerts.handle([const AlertRaised(_car)]);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(voice.said, isEmpty);
+  });
+}
+
+class _NoDetector implements ObjectDetector {
+  @override
+  Future<void> load() async {}
+
+  @override
+  Future<List<Detection>> detect(Uint8List jpeg) async => const [];
+
+  @override
+  void dispose() {}
 }

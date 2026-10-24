@@ -7,16 +7,22 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../alerts/alert_engine.dart' show ClearReason, PossiblyFollowing;
+import '../alerts/alert_log.dart';
 import '../app.dart';
 import '../components/alerts.dart';
 import '../components/captions_and_who.dart';
 import '../components/celebration.dart';
 import '../components/common.dart';
+import '../components/event_log.dart';
 import '../components/privacy_chip.dart';
+import '../components/rear_view.dart';
 import '../components/ring_stack.dart';
 import '../components/social.dart';
 import '../components/status_strip.dart';
 import '../net/glasses_link.dart';
+import '../net/protocol.dart';
+import '../vision/detector.dart';
 import '../theme/theme.dart';
 
 enum _Variant {
@@ -132,6 +138,32 @@ class _WidgetGalleryState extends State<WidgetGallery> {
           SideIndicator(),
         ],
       ),
+    ),
+    (
+      'RearView',
+      (_) => const _Column([
+        RearView(frame: null, detections: []),
+        RearView(
+          frame: null,
+          placeholder: '',
+          detections: [
+            Detection(label: 'car', confidence: 0.9, box: Rect.fromLTWH(0.08, 0.35, 0.35, 0.3)),
+            Detection(label: 'person', confidence: 0.8, box: Rect.fromLTWH(0.62, 0.2, 0.16, 0.55)),
+          ],
+          notes: ['3.2 s', '-'],
+        ),
+      ]),
+    ),
+    (
+      'FollowingCard',
+      (_) => FollowingCard(notice: const PossiblyFollowing(WearerSide.right, Duration(minutes: 3)), onDismiss: () {}),
+    ),
+    (
+      'EventLogCard',
+      (_) => _Column([
+        EventLogCard(entries: _fakeLog(), onClear: () {}, now: _fakeNow),
+        EventLogCard(entries: const [], now: _fakeNow),
+      ]),
     ),
     ('SocialTapCard', (_) => SocialTapCard(direction: Direction.left, announce: false, onDismiss: () {})),
     (
@@ -401,3 +433,32 @@ class _CelebrationDemo extends StatelessWidget {
     );
   }
 }
+
+final _fakeNow = DateTime(2026, 10, 24, 15, 30);
+
+List<LogEntry> _fakeLog() => [
+  LogEntry(
+    kind: LogKind.alert,
+    at: DateTime(2026, 10, 24, 15, 12),
+    side: WearerSide.left,
+    label: 'car',
+    level: AlertLevel.urgent,
+    reflex: true,
+    closestSeconds: 1.8,
+    ended: ClearReason.silenced,
+  ),
+  LogEntry(
+    kind: LogKind.following,
+    at: DateTime(2026, 10, 24, 14, 2),
+    side: WearerSide.right,
+    behindFor: const Duration(minutes: 3),
+  ),
+  LogEntry(
+    kind: LogKind.alert,
+    at: DateTime(2026, 10, 23, 18, 40),
+    side: WearerSide.right,
+    label: 'bicycle',
+    closestSeconds: 4.1,
+    ended: ClearReason.dismissed,
+  ),
+];
