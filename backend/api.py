@@ -21,6 +21,9 @@ same network can call it. Interactive docs at /docs.
     POST /assist/describe        {"question"?}: same, whole forward view
     GET  /assist/last            the last answer
     GET  /muse/usage             Muse spend, caps, tokens, recent calls
+    POST /rear/packets           raw rear-protocol packets (HTTP transport for an ESP32 bridge)
+    GET  /rear/status            FPGA link: online, packet/CRC stats, last result
+    GET  /rear/events            recent rear results (what, dangerous, side, time to contact)
     GET  /screentime             Mac app usage (real) + iOS usage (mock, labelled)
     GET  /screentime/correlation eye metrics per Mac app and category
     GET  /facetime               current OBS scene
@@ -33,7 +36,7 @@ import time
 from pathlib import Path
 
 import cv2
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -205,6 +208,25 @@ def create_app(rt):
     @app.get("/muse/usage")
     def muse_usage():
         return rt.muse.usage()
+
+    @app.post("/rear/packets")
+    async def rear_packets(request: Request):
+        if rt.rear_service is None:
+            raise HTTPException(409, "rear.mode is not fpga")
+        body = await request.body()
+        before = rt.rear_service.stats["parse_errors"]
+        n = rt.rear_service.feed_bytes(body, source=f"http:{request.client.host if request.client else '?'}")
+        return {"accepted": n, "errors": rt.rear_service.stats["parse_errors"] - before}
+
+    @app.get("/rear/status")
+    def rear_status():
+        if rt.rear_service is None:
+            return {"mode": rt.rear_mode}
+        return rt.rear_service.status()
+
+    @app.get("/rear/events")
+    def rear_events():
+        return list(reversed(rt.rear_service.history)) if rt.rear_service is not None else []
 
     @app.get("/screentime")
     def screentime_usage(range: str = "day"):

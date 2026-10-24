@@ -107,9 +107,21 @@ muse:                     # Meta Muse Spark via the Model API (backend/muse_clie
 rear:
   mode: fpga              # fpga: events from the FPGA (the product) | software: lgmd.py on a rear stream
   flip: true              # rear camera: image-left = wearer's right
-  cooldown_s: 4.0         # minimum time between spoken warnings
+  cooldown_s: 4.0         # minimum time between spoken generic warnings
+  fpga:                   # rear.mode: fpga (backend/rear/, docs/rear_event_protocol.md)
+    transports: [udp]     # udp (ESP32 bridge or tools/mock_fpga.py) and/or serial (USB from the FPGA)
+    udp_port: 4300
+    serial_port: null     # e.g. /dev/tty.usbserial-XXXX (Tang Nano 20K), or --rear-serial
+    baud: 921600
+    gap_timeout_s: 1.0    # no packet for this long: classify whatever arrived
+    clip_timeout_s: 10.0  # never wait longer than this after EVENT
+    tau_danger_s: 4.0     # time to contact below this = approaching fast
+    min_growth: 1.3       # or the object grew this much over the clip
+    say_false_alarm: true # follow a false alarm with "Never mind, nothing dangerous"
+    muse_followup: false  # send one frame of dangerous events to Muse (dashboard text only)
+    save_clips: true      # backend/data/clips/event_*.npz
   speech: auto            # standalone `python -m backend.rear_alert` only; the backend uses `speech`
-  message: "Object approaching from behind"
+  message: "Something approaching from behind"
   lgmd:                   # rear.mode: software only. Same names and defaults as lgmd.py
     p_min: 10
     w_shift: 1

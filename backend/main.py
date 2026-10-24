@@ -30,6 +30,7 @@ from backend.speech import Voice
 from backend.assist import Assistant
 from backend.muse_client import MuseClient
 from backend.vision import Detector
+from backend.rear.service import RearService
 from backend.streams import StreamManager, blank
 
 STORED_EVENTS = {"blink", "squint_start", "squint_end", "too_close_start", "too_close_end",
@@ -95,6 +96,8 @@ class Runtime:
                                    self.voice, self.emit, focal_px=self.distance._focal, db=self.db)
         self.rear = (RearAlert(cfg, speaker=self.voice)
                      if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None)
+        self.rear_service = (RearService(cfg, self.voice, self.emit, self.detector, self.muse, self.db)
+                             if self.rear_mode == "fpga" else None)
         self.camera_state = {}                         # camera name -> "online" | "offline"
 
     # -- state shared with the API --------------------------------------------
@@ -226,8 +229,9 @@ class Runtime:
             loops.append(("front", s.get("front"), [self._front_step], [self.distance.annotate]))
         if self.rear is not None:
             loops.append(("rear", s.get("rear"), [self._rear_step], [self.rear.annotate]))
-        elif self.rear_mode == "fpga":
+        elif self.rear_service is not None:
             print("[rear] fpga mode: rear warnings come from FPGA events (docs/rear_event_protocol.md)")
+            self.rear_service.start()
         for name, reader, steps, ann in loops:
             threading.Thread(target=self._loop, args=(name, reader, steps, ann), name=name, daemon=True).start()
         self.pipeline_names = [n for n, *_ in loops]
@@ -244,6 +248,8 @@ class Runtime:
             from backend.app_bridge import AppBridge
             rear_reader = s.get("rear") if self.rear is not None else None
             self.bridge = AppBridge(self.cfg, self.live, rear_reader).start()
+            if self.rear_service is not None:
+                self.rear_service.bridge = self.bridge
         return self
 
     def frame(self, name):
@@ -257,9 +263,36 @@ class Runtime:
 
     def stop(self):
         self._stop.set()
+        if self.rear_service is not None:
+            self.rear_service.stop()
         if self.bridge:
             self.bridge.stop()
         self.streams.close()
+
+
+def start_mock_fpga(cfg, every):
+    """Dev: send mock FPGA events (person / leaves / ...) to our own UDP receiver."""
+    import itertools
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import mock_fpga
+    from backend.rear import scenes
+
+    port = cfg["rear"].get("fpga", {}).get("udp_port", 4300)
+    sender = mock_fpga.Sender("udp", "127.0.0.1", port)
+
+    def loop():
+        time.sleep(min(every, 8.0))
+        for event_id, (name, side) in zip(itertools.count(1), itertools.cycle(mock_fpga.CYCLE)):
+            fn = scenes.SCENES[name]
+            frames = fn(side) if name in ("person", "recede") else fn()
+            sender.send(mock_fpga.build_packets(frames, event_id & 0xFFFF or 1))
+            print(f"[mock_fpga] sent event {event_id}: {name}{f' ({side})' if side else ''}")
+            time.sleep(every)
+
+    print(f"[mock_fpga] DEV: a mock rear event every {every:.0f} s to UDP {port}")
+    threading.Thread(target=loop, name="mock-fpga", daemon=True).start()
 
 
 def main(argv=None):
@@ -274,6 +307,10 @@ def main(argv=None):
     ap.add_argument("--eye", help="override cameras.eye.source")
     ap.add_argument("--front", help="override cameras.front.source")
     ap.add_argument("--rear", help="override cameras.rear.source")
+    ap.add_argument("--rear-mode", choices=("fpga", "software"), help="override rear.mode")
+    ap.add_argument("--rear-serial", metavar="PORT", help="read FPGA packets from this serial port too")
+    ap.add_argument("--mock-fpga", type=float, metavar="SECONDS", nargs="?", const=15.0,
+                    help="dev: run tools/mock_fpga.py inside the backend, one event every N s (default 15)")
     ap.add_argument("--eye-method", choices=("closeup", "facemesh"),
                     help="override eye.method (e.g. --dev --eye synthetic-eye --eye-method closeup)")
     ap.add_argument("--port", type=int, help="override api.port")
@@ -287,6 +324,12 @@ def main(argv=None):
     for cam in ("eye", "front", "rear"):
         if getattr(args, cam) is not None:
             cfg["cameras"].setdefault(cam, {})["source"] = getattr(args, cam)
+    if args.rear_mode:
+        cfg["rear"]["mode"] = args.rear_mode
+    if args.rear_serial:
+        fp = cfg["rear"].setdefault("fpga", {})
+        fp["transports"] = sorted(set(fp.get("transports", ["udp"])) | {"serial"})
+        fp["serial_port"] = args.rear_serial
     if args.eye_method == "closeup":
         # Product eye settings, even on top of the dev overlay.
         cfg["eye"].update(method="closeup", default_baseline=1.0, blink_min_frames=2, blink_max_frames=7)
@@ -306,6 +349,8 @@ def main(argv=None):
         cfg["rear"]["speech"] = args.speech
 
     rt = Runtime(cfg).start()
+    if args.mock_fpga:
+        start_mock_fpga(cfg, args.mock_fpga)
     app = create_app(rt)
     host, port = cfg["api"].get("host", "0.0.0.0"), cfg["api"].get("port", 8000)
     print(f"[api] dashboard http://localhost:{port}/   docs http://localhost:{port}/docs")

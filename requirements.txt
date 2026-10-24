@@ -11,4 +11,6 @@ obsws-python==1.8.0
 # YOLO object detection (pulls in torch, ~1 GB). Pinned: unpinned, pip backtracks to an old
 # release that needs numpy built from source.
 ultralytics==8.4.187
+# USB-serial receiver for the rear FPGA's event packets
+pyserial==3.5
 # Optional, not installed by default: pyttsx3 (speech off macOS)

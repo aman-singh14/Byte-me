@@ -129,13 +129,24 @@ class Reassembly(unittest.TestCase):
         f = [bytes([i]) * 2600 for i in range(3)]
         pkts = p.encode_event(ev(width=52, height=50, frame_count=3), f, 1)
         a = Assembled()
-        a.feed_all(pkts[:4] + pkts[5:])                              # lose one chunk of frame 1
+        a.feed_all(pkts[:4] + pkts[5:])                              # lose chunk 0 of frame 1
         clip = a.clips[0]
-        self.assertIsNone(clip.frames[1])
+        # GRAY8: 2 of 3 chunks arrived, so frame 1 is rebuilt; the lost rows come from frame 0.
+        self.assertEqual(clip.patched, [1])
+        self.assertEqual(clip.frames[1][:1024], f[0][:1024])
+        self.assertEqual(clip.frames[1][1024:], f[1][1024:])
         self.assertEqual(clip.frames[0], f[0])
         self.assertFalse(clip.complete)
         self.assertFalse(clip.crc_ok)
         self.assertEqual(clip.dropped_packets, 1)
+
+    def test_jpeg_frames_are_not_patched(self):
+        f = [bytes([i]) * 2600 for i in range(3)]
+        pkts = p.encode_event(ev(width=52, height=50, frame_count=3, pixel_format=p.JPEG), f, 1)
+        a = Assembled()
+        a.feed_all(pkts[:4] + pkts[5:])
+        self.assertIsNone(a.clips[0].frames[1])
+        self.assertEqual(a.clips[0].patched, [])
 
     def test_missing_end_flushes_partial(self):
         pkts = p.encode_event(ev(), frames(), 3)

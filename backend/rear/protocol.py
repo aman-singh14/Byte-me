@@ -258,6 +258,7 @@ class Clip:
     end: End | None = None
     crc_ok: bool | None = None          # None until END arrives
     dropped_packets: int = 0
+    patched: list = field(default_factory=list)   # GRAY8 frames rebuilt from partial chunks
 
     @property
     def complete(self):
@@ -319,6 +320,26 @@ class ClipAssembler:
         if self.current is not None:
             self._finish()
 
+    def _patch_gray(self, clip):
+        """A lost chunk of a GRAY8 frame is ~6 rows. Rebuild frames that have at least
+        half their chunks, filling the gaps from the previous frame (or black). The
+        clip stays incomplete / CRC-failed; this only gives the classifier more to see."""
+        if clip.event.pixel_format != GRAY8:
+            return
+        size = clip.event.width * clip.event.height
+        prev = None
+        for i, f in enumerate(clip.frames):
+            parts, count = self._chunks.get(i, {}), self._counts.get(i)
+            if f is None and count and len(parts) * 2 >= count:
+                buf = bytearray(prev if prev is not None else bytes(size))
+                for ci, data in parts.items():
+                    buf[ci * MAX_CHUNK_DATA:ci * MAX_CHUNK_DATA + len(data)] = data
+                clip.frames[i] = bytes(buf[:size])
+                clip.patched.append(i)
+            if clip.frames[i] is not None:
+                prev = clip.frames[i]
+
     def _finish(self):
         clip, self.current = self.current, None
+        self._patch_gray(clip)
         self.on_clip(clip)

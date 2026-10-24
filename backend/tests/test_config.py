@@ -54,7 +54,7 @@ class DevConfig(unittest.TestCase):
         self.assertEqual(cfg["cameras"]["eye"]["source"], 0)
         self.assertEqual(cfg["eye"]["method"], "facemesh")
         self.assertEqual(cfg["distance"]["method"], "face")
-        self.assertEqual(cfg["rear"]["mode"], "software")
+        self.assertEqual(cfg["rear"]["mode"], "fpga")             # mock FPGA in dev
         # Untouched product values survive the merge.
         self.assertEqual(cfg["distance"]["too_close_cm"], {"laptop": 50, "phone": 30})
         self.assertEqual(cfg["api"]["port"], 8000)

@@ -7,7 +7,8 @@
 #   FRONT  laptop webcam too (shares the reader); distance from your face width.
 #          For "what am I looking at?", point it at a still image instead:
 #          --front sample:bus.jpg   (or any .jpg/.png/.mp4 path)
-#   REAR   software LGMD on lgmd.py's synthetic looming square (until tools/mock_fpga.py exists)
+#   REAR   FPGA events from tools/mock_fpga.py: run it in another terminal, or pass --mock-fpga
+#          (or --rear-mode software --rear synthetic for the old in-laptop lgmd.py path)
 #
 # To try the product's close-up eye method with no eye camera: --eye synthetic-eye --eye-method closeup
 #
@@ -20,8 +21,6 @@ cameras:
     source: 0
   front:
     source: 0
-  rear:
-    source: synthetic
 
 eye:
   method: facemesh        # DEV ONLY stand-in for the close-up eye camera
@@ -33,4 +32,4 @@ distance:
   method: face            # DEV ONLY: the webcam looks at you, not at a screen
 
 rear:
-  mode: software          # until tools/mock_fpga.py + backend/rear/ exist
+  mode: fpga              # events from tools/mock_fpga.py (UDP 4300)
