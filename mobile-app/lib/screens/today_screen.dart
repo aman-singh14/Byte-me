@@ -12,6 +12,7 @@ import 'alert_widgets.dart';
 import 'home_shell.dart';
 import 'together_widgets.dart';
 import 'link_widgets.dart';
+import 'helper_screen.dart';
 import 'settings_screen.dart';
 
 class TodayScreen extends StatelessWidget {
@@ -38,6 +39,7 @@ class TodayScreen extends StatelessWidget {
           text: 'Heads-up and Outside rings arrive in phase 3.',
         ),
         if (following != null) const LiveFollowingCard(),
+        const HelperCallCard(),
         const _AwarenessCard(),
         const PlaceholderCard(
           icon: Symbols.visibility_rounded,

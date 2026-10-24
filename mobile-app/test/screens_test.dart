@@ -14,6 +14,7 @@ import 'package:omni_glasses/components/alerts.dart';
 import 'package:omni_glasses/gallery/widget_gallery.dart';
 import 'package:omni_glasses/net/glasses_link.dart';
 import 'package:omni_glasses/net/protocol.dart';
+import 'package:omni_glasses/helper/helper_call.dart';
 import 'package:omni_glasses/screens/home_shell.dart';
 import 'package:omni_glasses/screens/profile_sheets.dart';
 import 'package:omni_glasses/social/rings_source.dart';
@@ -54,6 +55,13 @@ Future<AlertService> pumpApp(
   if (together) rings.set(70, 0); // two Look up stars
   final togetherTime = TogetherTime(social: social, radio: FakeRadio());
   addTearDown(togetherTime.dispose);
+  final helperCall = HelperCall(
+    toGlasses: link.send,
+    cameras: GlassesCameras(vision),
+    alerts: alerts.events,
+    watchLifecycle: false,
+  );
+  addTearDown(helperCall.dispose);
   addTearDown(quests.dispose);
   addTearDown(social.dispose);
   addTearDown(alerts.dispose);
@@ -70,6 +78,7 @@ Future<AlertService> pumpApp(
         ChangeNotifierProvider.value(value: social),
         ChangeNotifierProvider.value(value: quests),
         ChangeNotifierProvider.value(value: togetherTime),
+        ChangeNotifierProvider.value(value: helperCall),
       ],
       child: MaterialApp(theme: omniLightTheme, darkTheme: omniDarkTheme, home: home),
     ),

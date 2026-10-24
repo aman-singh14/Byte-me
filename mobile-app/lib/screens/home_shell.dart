@@ -11,6 +11,7 @@ import 'eyes_screen.dart';
 import 'link_widgets.dart';
 import 'today_screen.dart';
 import 'together_screen.dart';
+import 'helper_screen.dart';
 import 'together_widgets.dart';
 
 class HomeShell extends StatefulWidget {
@@ -30,17 +31,19 @@ class _HomeShellState extends State<HomeShell> {
     return LinkAnnouncer(
       child: AlertAnnouncer(
         child: TogetherAnnouncer(
-          child: Scaffold(
-            body: IndexedStack(index: _tab, children: _tabs),
-            bottomNavigationBar: NavigationBar(
-              selectedIndex: _tab,
-              onDestinationSelected: (i) => setState(() => _tab = i),
-              destinations: const [
-                NavigationDestination(icon: Icon(Symbols.today_rounded), label: 'Today'),
-                NavigationDestination(icon: Icon(Symbols.radar_rounded), label: 'Aware'),
-                NavigationDestination(icon: Icon(Symbols.visibility_rounded), label: 'Eyes'),
-                NavigationDestination(icon: Icon(Symbols.groups_rounded), label: 'Together'),
-              ],
+          child: HelperAnnouncer(
+            child: Scaffold(
+              body: IndexedStack(index: _tab, children: _tabs),
+              bottomNavigationBar: NavigationBar(
+                selectedIndex: _tab,
+                onDestinationSelected: (i) => setState(() => _tab = i),
+                destinations: const [
+                  NavigationDestination(icon: Icon(Symbols.today_rounded), label: 'Today'),
+                  NavigationDestination(icon: Icon(Symbols.radar_rounded), label: 'Aware'),
+                  NavigationDestination(icon: Icon(Symbols.visibility_rounded), label: 'Eyes'),
+                  NavigationDestination(icon: Icon(Symbols.groups_rounded), label: 'Together'),
+                ],
+              ),
             ),
           ),
         ),

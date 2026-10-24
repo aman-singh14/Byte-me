@@ -164,6 +164,28 @@ class TapCommand extends GlassesCommand {
   Map<String, Object> toJson() => {'t': 'tap', 'side': side.wire, 'kind': kind};
 }
 
+/// Where a remote helper wants the wearer to go (Call a helper). The frame
+/// plays a guidance buzz that feels clearly different from approach alerts.
+enum GuideDirection {
+  left('L'),
+  right('R'),
+  forward('fwd'),
+  stop('stop');
+
+  const GuideDirection(this.wire);
+  final String wire;
+
+  static GuideDirection? fromWire(Object? s) => values.where((d) => d.wire == s).firstOrNull;
+}
+
+class GuideCommand extends GlassesCommand {
+  const GuideCommand(this.dir);
+  final GuideDirection dir;
+
+  @override
+  Map<String, Object> toJson() => {'t': 'guide', 'dir': dir.wire};
+}
+
 class GroupBreakCommand extends GlassesCommand {
   const GroupBreakCommand();
   @override

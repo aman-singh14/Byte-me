@@ -18,6 +18,7 @@ import '../vision/detector.dart';
 import '../vision/mjpeg.dart';
 import '../vision/rear_vision.dart';
 import 'alert_widgets.dart';
+import 'helper_screen.dart';
 import 'home_shell.dart';
 
 class AwareScreen extends StatelessWidget {
@@ -43,6 +44,7 @@ class AwareScreen extends StatelessWidget {
         else
           _LiveRearView(camera: camera, loop: vision.loop, detectorState: vision.detectorState),
         if (alerts.following != null) const LiveFollowingCard(),
+        const HelperCallCard(),
         EventLogCard(entries: alerts.log.entries, onClear: alerts.clearLog),
       ],
     );
