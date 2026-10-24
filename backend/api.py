@@ -17,6 +17,10 @@ same network can call it. Interactive docs at /docs.
     POST /gaze/calibrate         {"regions": ["left","center","right"]} (default all three, ~3 s each)
     POST /gaze/calibrate/cancel
     PUT  /gaze/regions           {"left": [0, 0.41], "center": [0.26, 0.74], "right": [0.59, 1]}
+    POST /assist/look            {"question"?, "region_override"?: left|center|right|all}: what am I looking at?
+    POST /assist/describe        {"question"?}: same, whole forward view
+    GET  /assist/last            the last answer
+    GET  /muse/usage             Muse spend, caps, tokens, recent calls
     GET  /screentime             Mac app usage (real) + iOS usage (mock, labelled)
     GET  /screentime/correlation eye metrics per Mac app and category
     GET  /facetime               current OBS scene
@@ -52,6 +56,11 @@ class Device(BaseModel):
 
 class FaceTimeTarget(BaseModel):
     target: str = "toggle"
+
+
+class LookRequest(BaseModel):
+    question: str | None = None
+    region_override: str | None = None
 
 
 class GazeCalibration(BaseModel):
@@ -176,6 +185,26 @@ def create_app(rt):
                 raise HTTPException(400, f"{name}: need 0 <= start < end <= 1")
         rt.gaze.regions = {k: tuple(v) for k, v in regions.items()}
         return {"ok": True, "regions": rt.gaze.regions}
+
+    @app.post("/assist/look")
+    def assist_look(body: LookRequest | None = None):
+        body = body or LookRequest()
+        try:
+            return rt.assistant.look(body.question, body.region_override)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/assist/describe")
+    def assist_describe(body: LookRequest | None = None):
+        return rt.assistant.look((body.question if body else None) or "Describe what is in front of me.", "all")
+
+    @app.get("/assist/last")
+    def assist_last():
+        return rt.assistant.last or {}
+
+    @app.get("/muse/usage")
+    def muse_usage():
+        return rt.muse.usage()
 
     @app.get("/screentime")
     def screentime_usage(range: str = "day"):

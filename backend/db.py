@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS app_usage (
     source TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS app_usage_start ON app_usage (start);
+CREATE TABLE IF NOT EXISTS muse_calls (
+    id INTEGER PRIMARY KEY,
+    ts REAL NOT NULL,
+    purpose TEXT,
+    model TEXT,
+    ok INTEGER,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    cached_tokens INTEGER,
+    cost_usd REAL,
+    latency_s REAL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS muse_calls_ts ON muse_calls (ts);
 """
 
 RANGES = {           # range -> (seconds, bucket seconds)
@@ -58,6 +73,16 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+
+    def close(self):
+        with self.lock:
+            self.conn.close()
+
+    def __del__(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
     def _exec(self, sql, args=()):
         with self.lock:
@@ -159,6 +184,30 @@ class DB:
             sql += " AND source = ?"
             args.append(source)
         return self._query(sql + " ORDER BY start", args)
+
+    def add_muse_call(self, ts, purpose, model, ok, prompt_tokens=0, completion_tokens=0, reasoning_tokens=0,
+                      cached_tokens=0, cost_usd=0.0, latency_s=0.0, error=None):
+        return self._exec("""INSERT INTO muse_calls (ts, purpose, model, ok, prompt_tokens, completion_tokens,
+                             reasoning_tokens, cached_tokens, cost_usd, latency_s, error)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (ts, purpose, model, int(ok), prompt_tokens, completion_tokens, reasoning_tokens,
+                           cached_tokens, cost_usd, latency_s, error))
+
+    def muse_spend(self, since=0.0):
+        r = self._query("""SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost,
+                                  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                                  COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                                  COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+                                  COALESCE(SUM(1 - ok), 0) AS failed
+                           FROM muse_calls WHERE ts >= ?""", (since,))[0]
+        return r
+
+    def muse_by_purpose(self, since=0.0):
+        return self._query("""SELECT purpose, COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost
+                              FROM muse_calls WHERE ts >= ? GROUP BY purpose ORDER BY cost DESC""", (since,))
+
+    def muse_recent(self, limit=10):
+        return self._query("SELECT * FROM muse_calls ORDER BY ts DESC LIMIT ?", (limit,))
 
     def clear_source(self, source):
         self._exec("DELETE FROM app_usage WHERE source = ?", (source,))

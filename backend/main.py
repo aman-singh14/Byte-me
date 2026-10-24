@@ -27,10 +27,13 @@ from backend.eye_tracking import EyeTracker, FaceMeshEyes
 from backend.gaze import GazeTracker
 from backend.rear_alert import RearAlert
 from backend.speech import Voice
+from backend.assist import Assistant
+from backend.muse_client import MuseClient
+from backend.vision import Detector
 from backend.streams import StreamManager, blank
 
 STORED_EVENTS = {"blink", "squint_start", "squint_end", "too_close_start", "too_close_end",
-                 "alert", "calibrated", "break", "facetime", "gaze_calibrated"}
+                 "alert", "calibrated", "break", "facetime", "gaze_calibrated"}   # "assist" is stored by Assistant
 QUIET_EVENTS = {"blink", "speak"}      # not printed (speak is printed by the voice itself)
 
 
@@ -85,6 +88,11 @@ class Runtime:
         self.distance = DistanceEstimator(cfg, face_mesh=self.eye.extractor.mesh if self.shared_face else None)
         self.rear_mode = cfg.get("rear", {}).get("mode", "fpga")
         # rear.mode: software runs lgmd.py on a rear stream; fpga mode gets events instead (backend/rear).
+        v = cfg.get("vision", {})
+        self.detector = Detector(v.get("model", "yolov8n.pt"), v.get("min_conf", 0.35))
+        self.muse = MuseClient(cfg, self.db)
+        self.assistant = Assistant(self.streams.cameras.get("front"), self.detector, self.muse, self.gaze,
+                                   self.voice, self.emit, focal_px=self.distance._focal, db=self.db)
         self.rear = (RearAlert(cfg, speaker=self.voice)
                      if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None)
         self.camera_state = {}                         # camera name -> "online" | "offline"
@@ -224,6 +232,10 @@ class Runtime:
             threading.Thread(target=self._loop, args=(name, reader, steps, ann), name=name, daemon=True).start()
         self.pipeline_names = [n for n, *_ in loops]
         threading.Thread(target=self._sampler, name="sampler", daemon=True).start()
+        threading.Thread(target=self.detector._load, name="yolo-load", daemon=True).start()   # warm up
+        m = self.muse.usage()
+        print(f"[muse] {m['model']}: {'key found' if m['has_key'] else 'NO KEY (local answers only)'}, "
+              f"spent ${m['total_usd']:.4f} of ${m['lifetime_cap_usd']:.2f}")
 
         if self.cfg.get("screentime", {}).get("mac_tracker", True):
             from backend.screentime import MacAppTracker

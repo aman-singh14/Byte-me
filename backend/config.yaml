@@ -82,6 +82,28 @@ gaze:                     # backend/gaze.py: LEFT / CENTER / RIGHT from the pupi
     center: [0.0, 0.0]
     right: [0.25, 0.0]
 
+vision:                   # local object detection (backend/vision.py)
+  model: yolov8n.pt       # in backend/models/ (downloaded on first use)
+  min_conf: 0.35
+
+muse:                     # Meta Muse Spark via the Model API (backend/muse_client.py)
+  enabled: true           # key: MUSE_API_KEY in .env (gitignored)
+  base_url: https://api.meta.ai/v1
+  model: muse-spark-1.3   # same price as 1.1 / 1.2; any Muse Spark ID works here
+  max_tokens: 300         # hidden reasoning uses ~60-90 of these before the answer
+  reasoning_effort: minimal
+  timeout_s: 20
+  lifetime_cap_usd: 10.0  # hard stop: no call once this much is spent (incl. prior_spend_usd)
+  daily_cap_usd: 5.0
+  max_calls_per_min: 6
+  prior_spend_usd: 0.0016 # two verification calls made before the backend logged usage
+  image_max_side: 512     # frames are downscaled + JPEG'd before sending (~300 tokens)
+  image_quality: 70
+  price_per_mtok:         # Standard tier, from Meta's pricing page
+    input: 1.25
+    cached_input: 0.15
+    output: 4.25
+
 rear:
   mode: fpga              # fpga: events from the FPGA (the product) | software: lgmd.py on a rear stream
   flip: true              # rear camera: image-left = wearer's right
