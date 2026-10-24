@@ -83,6 +83,23 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
   color: var(--page); padding: 10px 16px; border-radius: 8px; font-size: 14px; display: none; z-index: 5; }
 .offline-banner { display: none; background: var(--warning); color: #0b0b0b; font-weight: 600;
   padding: 10px 20px; text-align: center; }
+.big-btn { font-size: 20px; font-weight: 700; min-height: 64px; padding: 12px 24px; border-radius: 12px;
+  background: var(--series); color: #fff; border: 0; }
+.big-btn:hover { background: var(--series); filter: brightness(1.08); }
+.big-btn:disabled { opacity: .6; cursor: wait; }
+.answer { font-size: 18px; line-height: 1.4; margin-top: 12px; min-height: 26px; }
+.answer .src { display: block; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; margin-top: 8px; }
+.ask-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.ask-row input { flex: 1; min-width: 180px; font: inherit; font-size: 16px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); min-height: 44px; }
+.mic[aria-pressed="true"] { background: var(--critical); color: #fff; border-color: var(--critical); }
+.gaze { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0; }
+.gaze div { text-align: center; padding: 14px 0; border-radius: 10px; background: var(--grid); color: var(--ink-2);
+  font-weight: 700; font-size: 15px; border: 2px solid transparent; }
+.gaze div.on { background: var(--series); color: #fff; border-color: var(--series); }
+.prompt { font-size: 22px; font-weight: 700; min-height: 30px; }
+.alert-banner.calm { background: var(--ink-2); }
 .alert-banner { display: none; background: var(--critical); color: #fff; font-weight: 700; font-size: 18px;
   padding: 14px 20px; text-align: center; }
 </style>
@@ -93,13 +110,50 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
 <header>
   <h1>Mega Glasses</h1>
   <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn">connecting</span></span>
+  <span class="mock" id="mode-badge" hidden title="Stand-in cameras (webcam / still image / mock FPGA), not the product">DEV MODE</span>
   <span class="spacer"></span>
+  <label class="pill"><input type="checkbox" id="speak-here"> Speak answers on this device</label>
   <label class="pill">Range
     <select id="range"><option value="hour">Last hour</option><option value="day" selected>Today (24 h)</option><option value="week">Last 7 days</option></select>
   </label>
   <button id="theme" title="Switch light / dark">Theme</button>
 </header>
 <main>
+  <div class="grid">
+    <div class="card c8">
+      <h2>Ask the glasses</h2>
+      <p class="sub">Looks at the part of the front camera's view you are looking at. A quick local answer is spoken
+        first; Muse adds detail a few seconds later.</p>
+      <button class="big-btn" id="look-btn">What am I looking at?</button>
+      <div class="ask-row" role="group" aria-label="Look somewhere specific">
+        <button data-region="left">What's on my left?</button>
+        <button data-region="center">What's ahead?</button>
+        <button data-region="right">What's on my right?</button>
+        <button data-region="all">Describe everything</button>
+      </div>
+      <div class="ask-row">
+        <button class="mic" id="mic" aria-pressed="false" title="Hold to talk">🎤 Hold to ask</button>
+        <input id="question" placeholder="Or type a question, e.g. is there a door on my right?" aria-label="Question">
+        <button id="ask-btn">Ask</button>
+      </div>
+      <div class="answer" id="answer" aria-live="polite"></div>
+      <div class="note" id="mic-note"></div>
+      <div class="note" id="muse-note"></div>
+    </div>
+    <div class="card c4">
+      <h2>Gaze</h2>
+      <div class="gaze" id="gaze" aria-live="polite">
+        <div data-g="left">LEFT</div><div data-g="center">CENTER</div><div data-g="right">RIGHT</div>
+      </div>
+      <div class="prompt" id="gaze-prompt" aria-live="assertive"></div>
+      <div class="note" id="gaze-note"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="gaze-cal">Calibrate gaze</button>
+        <button id="gaze-cancel" hidden>Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="grid">
     <div class="card c4">
       <div class="label">Blink rate</div>
@@ -143,10 +197,17 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
         <button id="dev-laptop" aria-pressed="true">Laptop (50 cm)</button>
         <button id="dev-phone" aria-pressed="false">Phone (30 cm)</button>
       </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card c12">
+      <h2>FaceTime</h2>
+      <p class="sub">Show callers what you see. Works with FaceTime on a Mac (through the OBS virtual camera).
+        On iPhone FaceTime, share your screen instead.</p>
       <div class="row">
-        <span class="label">FaceTime camera</span>
-        <button id="ft-glasses">Glasses view</button>
-        <button id="ft-mac">Mac webcam</button>
+        <button class="big-btn" id="ft-glasses">Switch FaceTime to glasses view</button>
+        <button id="ft-mac">Back to the Mac's camera</button>
         <span class="note" id="ft-note"></span>
       </div>
     </div>
@@ -167,8 +228,8 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
 
   <div class="grid">
     <div class="card c4">
-      <h2>Rear alerts</h2>
-      <p class="sub">Something approaching from behind (LGMD)</p>
+      <h2>Behind you</h2>
+      <p class="sub" id="rear-sub">Rear camera events: the FPGA's LGMD fires, then the clip is checked</p>
       <ul class="list" id="alerts"><li class="empty">Loading…</li></ul>
     </div>
     <div class="card c8">
@@ -360,7 +421,7 @@ function renderLive(d) {
   text($("blink"), d.blink_rate == null ? "–" : Math.round(d.blink_rate));
   $("blink-note").replaceChildren(
     eyeOff ? statusBadge("warning", "EYE camera offline") :
-    d.calibrating ? document.createTextNode("Calibrating: eyes open, look at the screen") :
+    d.calibrating ? document.createTextNode("Calibrating: keep the eye open, look ahead normally") :
     !d.eye_detected ? document.createTextNode("No eye in view") :
     d.blink_rate == null ? document.createTextNode("Measuring… (needs 10 s)") :
     d.blink_rate < 10 ? statusBadge("warning", "Low: blink more") : statusBadge("good", "Healthy"));
@@ -375,14 +436,95 @@ function renderLive(d) {
   $("squint-note").replaceChildren(document.createTextNode(d.eye_detected ?
     `Openness ${d.openness_ratio != null ? Math.round(d.openness_ratio * 100) + "%" : "–"} of baseline · ${d.blinks_total} blinks since start` : ""));
   text($("session"), d.session_min == null ? "–" : Math.round(d.session_min));
-  if (d.rear) text($("rear-note"), `LGMD K ${d.rear.k} / ${d.rear.k_thresh}`);
+  if (d.rear) text($("rear-note"), `software LGMD K ${d.rear.k} / ${d.rear.k_thresh}`);
+  $("mode-badge").hidden = d.mode !== "dev";
+  renderGaze(d);
   $("dev-laptop").setAttribute("aria-pressed", d.device === "laptop");
   $("dev-phone").setAttribute("aria-pressed", d.device === "phone");
 }
-function showAlert(e) {
-  const b = text($("banner"), "⚠ " + (e.data && e.data.text || "Something approaching from behind"));
-  b.style.display = "block"; clearTimeout(showAlert.h); showAlert.h = setTimeout(() => b.style.display = "none", 4000);
+function renderGaze(d) {
+  document.querySelectorAll("#gaze div").forEach(x => x.classList.toggle("on", x.dataset.g === d.gaze));
+  const cal = d.gaze_calibration;
+  text($("gaze-prompt"), cal && cal.prompt ? `${cal.prompt}${cal.remaining_s != null ? ` · ${Math.ceil(cal.remaining_s)}` : ""}` : "");
+  $("gaze-cancel").hidden = !cal;
+  $("gaze-cal").disabled = !!cal;
+  text($("gaze-note"), cal ? "Follow the prompts (they are spoken too)." :
+       d.gaze ? `Looking ${d.gaze === "center" ? "straight ahead" : d.gaze}${d.gaze_calibrated ? "" : " (not calibrated yet)"}` :
+       "Waiting for the eye camera.");
 }
+function showBanner(textMsg, calm = false, ms = 5000) {
+  const b = text($("banner"), (calm ? "" : "⚠ ") + textMsg);
+  b.classList.toggle("calm", calm);
+  b.style.display = "block"; clearTimeout(showBanner.h); showBanner.h = setTimeout(() => b.style.display = "none", ms);
+}
+
+// ---------------------------------------------------------------- speech on this device
+const LOCAL = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+// The laptop already speaks through `say`; on a phone, speak here by default.
+$("speak-here").checked = localStorage.getItem("speakHere") != null ? localStorage.getItem("speakHere") === "1" : !LOCAL;
+$("speak-here").onchange = e => localStorage.setItem("speakHere", e.target.checked ? "1" : "0");
+function speakHere(textMsg, priority) {
+  if (!$("speak-here").checked || !("speechSynthesis" in window)) return;
+  if (priority === "urgent") speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(textMsg);
+  u.rate = 1.05;
+  speechSynthesis.speak(u);
+}
+
+// ---------------------------------------------------------------- ask the glasses
+function showAnswer(local, muse, note) {
+  const a = $("answer"); a.replaceChildren();
+  if (local) { a.append(el("span", "src", "Quick answer (on the laptop)"), el("div", null, local)); }
+  if (muse) { a.append(el("span", "src", "Muse"), el("div", null, muse)); }
+  if (note) a.append(el("div", "note", note));
+}
+async function ask(question, region) {
+  const btns = [$("look-btn"), $("ask-btn"), ...document.querySelectorAll("[data-region]")];
+  btns.forEach(b => b.disabled = true);
+  showAnswer(null, null, "Looking…");
+  try {
+    const r = await post("/assist/look", {question: question || null, region_override: region || null});
+    showAnswer(r.local_answer, r.muse_answer, r.muse_error ? `Muse unavailable: ${r.muse_error}` :
+               `Region: ${r.region} (${r.region_source}) · ${r.timing_s.total ?? "–"} s`);
+  } catch (e) { showAnswer(null, null, e.message); }
+  btns.forEach(b => b.disabled = false);
+  loadMuse();
+}
+$("look-btn").onclick = () => ask(null, null);
+document.querySelectorAll("[data-region]").forEach(b => b.onclick = () => ask(b.textContent, b.dataset.region));
+$("ask-btn").onclick = () => ask($("question").value.trim(), null);
+$("question").onkeydown = e => { if (e.key === "Enter") ask($("question").value.trim(), null); };
+
+// Push-to-talk: the browser's speech recognition (Chrome, Safari). Browsers only allow the mic
+// on localhost or HTTPS, so on a phone over plain http the text box is the way to ask.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if (!SR || !window.isSecureContext) {
+  $("mic").disabled = true;
+  text($("mic-note"), !SR ? "Voice questions need Chrome or Safari; type instead." :
+       "The mic only works on localhost or HTTPS. Type your question, or open the dashboard on the laptop.");
+} else {
+  const start = () => {
+    rec = new SR(); rec.lang = "en-US"; rec.interimResults = true;
+    rec.onresult = e => {
+      const t = Array.from(e.results).map(r => r[0].transcript).join(" ");
+      $("question").value = t;
+      if (e.results[e.results.length - 1].isFinal) { stop(); ask(t, null); }
+    };
+    rec.onerror = e => { text($("mic-note"), `Mic: ${e.error}`); stop(); };
+    rec.onend = () => $("mic").setAttribute("aria-pressed", "false");
+    $("mic").setAttribute("aria-pressed", "true"); rec.start();
+  };
+  const stop = () => { if (rec) { try { rec.stop(); } catch (e) {} rec = null; } };
+  $("mic").addEventListener("pointerdown", start);
+  $("mic").addEventListener("pointerup", stop);
+  $("mic").addEventListener("pointerleave", stop);
+  $("mic").addEventListener("keydown", e => { if ((e.key === " " || e.key === "Enter") && !rec) { e.preventDefault(); start(); } });
+  $("mic").addEventListener("keyup", e => { if (e.key === " " || e.key === "Enter") stop(); });
+}
+
+$("gaze-cal").onclick = () => post("/gaze/calibrate").then(r => toast(r.text)).catch(e => toast(e.message));
+$("gaze-cancel").onclick = () => post("/gaze/calibrate/cancel").catch(() => {});
 
 let ws, pollTimer;
 function connect() {
@@ -391,9 +533,25 @@ function connect() {
   ws.onopen = () => { text($("conn"), "live"); $("conn-dot").style.background = "var(--good)"; clearInterval(pollTimer); };
   ws.onmessage = m => {
     const d = JSON.parse(m.data);
-    if (d.type === "live") renderLive(d);
-    else if (d.type === "event" && d.kind === "alert") { showAlert(d); loadAlerts(); }
-    else if (d.type === "event" && d.kind === "calibrated") toast(`Eyes calibrated (baseline ${d.data.baseline})`);
+    if (d.type === "live") return renderLive(d);
+    if (d.type !== "event") return;
+    const data = d.data || {};
+    switch (d.kind) {
+      case "speak": speakHere(data.text, data.priority); break;
+      case "rear_event": showBanner(data.spoken || "Something approaching from behind", false, 8000); break;
+      case "rear_result":
+        showBanner(data.text, !data.dangerous, data.dangerous ? 8000 : 4000);
+        loadAlerts(); loadRear(); break;
+      case "alert": showBanner(data.text || "Something approaching from behind"); loadAlerts(); break;   // software mode
+      case "assist_answer":
+        if (data.stage === "local") showAnswer(data.text, null, "Asking Muse for more detail…");
+        else if (data.stage === "muse") showAnswer($("answer").querySelector("div")?.textContent, data.text);
+        break;
+      case "calibrated": toast(`Eye calibrated (baseline ${data.baseline})`); break;
+      case "gaze_calibrated": toast("Gaze calibrated"); break;
+      case "camera_offline": toast(`${data.camera.toUpperCase()} camera offline`); break;
+      case "camera_online": toast(`${data.camera.toUpperCase()} camera back online`); break;
+    }
   };
   ws.onclose = () => {
     text($("conn"), "reconnecting"); $("conn-dot").style.background = "var(--muted)";
@@ -408,9 +566,12 @@ async function loadAlerts() {
   const ul = $("alerts"); ul.replaceChildren();
   if (!rows.length) { ul.append(el("li", "empty", "None yet. All clear behind you.")); return; }
   for (const a of rows) {
-    const li = el("li"); const side = {L: "left", R: "right", C: "behind"}[a.data.side] || "";
-    li.append(statusBadge("critical", a.data.label ? `${a.data.label} approaching` : "Approaching"),
-              el("div", "meta", `${fmtTime(a.ts)} · ${side} · K ${a.data.k}`));
+    const li = el("li"), x = a.data || {};
+    const side = {L: "on your left", R: "on your right", C: "behind you"}[x.side] || "";
+    const [lvl, label] = x.dangerous === true ? ["critical", "Danger"] : x.dangerous === null ? ["warning", "Unknown"]
+                         : x.kind ? ["good", "Ignored"] : ["critical", "Alert"];
+    li.append(statusBadge(lvl, `${label}: ${x.text || (x.label ? x.label + " approaching" : "approaching")}`),
+              el("div", "meta", `${fmtTime(a.ts)} · ${side}${x.ttc_s ? ` · contact in ~${x.ttc_s} s` : ""} · LGMD K ${x.k}`));
     ul.append(li);
   }
 }
@@ -451,7 +612,18 @@ async function loadScreenTime() {
            {unit: "/min", emptyText: "Use a few apps for 30 s+ each with your face in view."});
   if (c.insight) text($("corr-sub"), c.insight);
 }
-const refresh = () => Promise.allSettled([loadHistory(), loadAlerts(), loadRecs(), loadScreenTime()]);
+async function loadMuse() {
+  const m = await get("/muse/usage");
+  text($("muse-note"), m.has_key ? `Muse (${m.model}): $${m.total_usd.toFixed(4)} spent of the $${m.lifetime_cap_usd} cap · ${m.calls} calls`
+                                  : "Muse: no API key, so local answers only.");
+}
+async function loadRear() {
+  const r = await get("/rear/status");
+  if (r.mode !== "fpga") { text($("rear-sub"), "Rear: software LGMD (fallback mode)"); return; }
+  const link = r.fpga_online ? "FPGA online" : r.stats.events ? "FPGA link idle" : "Waiting for the FPGA";
+  text($("rear-sub"), `${link} · ${r.stats.events} events · ${r.stats.parse_errors} bad packets`);
+}
+const refresh = () => Promise.allSettled([loadHistory(), loadAlerts(), loadRecs(), loadScreenTime(), loadMuse(), loadRear()]);
 
 // ---------------------------------------------------------------- controls
 $("range").onchange = e => { range = e.target.value; refresh(); };
@@ -462,7 +634,7 @@ $("theme").onclick = () => {
 };
 $("cal-eye").onclick = () => post("/calibrate/eye").then(r => toast(r.text)).catch(e => toast(e.message));
 $("cal-dist").onclick = () => {
-  const cm = parseFloat(prompt("How far is the camera from your face right now (cm)?", "50"));
+  const cm = parseFloat(prompt("Look at the screen. How far are the glasses from it right now (cm)?", "50"));
   if (cm > 0) post("/calibrate/distance", {known_cm: cm}).then(r => toast(`Distance calibrated at ${cm} cm`)).catch(e => toast(e.message));
 };
 for (const dev of ["laptop", "phone"])
@@ -472,7 +644,7 @@ for (const t of ["glasses", "mac"])
 $("cams-details").ontoggle = e => {
   document.querySelectorAll(".cams img").forEach(img => img.src = e.target.open ? API + "/" + img.dataset.src : "");
   if (e.target.open) get("/cameras").then(c => text($("cams-status"),
-    Object.entries(c).map(([k, v]) => `${k}: ${v.active || "down"} ${v.fps} fps`).join(" · "))).catch(() => {});
+    Object.entries(c).map(([k, v]) => `${k}: ${v.ok ? v.active + " " + v.fps + " fps" : "offline"}`).join(" · "))).catch(() => {});
 };
 addEventListener("resize", () => { clearTimeout(refresh.h); refresh.h = setTimeout(refresh, 250); });
 

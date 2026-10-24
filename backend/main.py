@@ -71,7 +71,7 @@ class Runtime:
         self.streams = StreamManager(cfg)
         self.fps = cfg.get("pipelines", {}).get("fps", 15)
         self._lock = threading.Lock()
-        self._live = {"started": time.time()}
+        self._live = {"started": time.time(), "mode": "dev" if cfg.get("dev") else "product"}
         self.recent = collections.deque(maxlen=200)    # (id, event dict) for the WebSocket
         self._event_id = 0
         self.frames = {}                               # camera name -> latest annotated frame
