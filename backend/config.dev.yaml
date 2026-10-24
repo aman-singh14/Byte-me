@@ -1,0 +1,32 @@
+# DEV MODE ONLY: python -m backend.main --dev
+#
+# Merged on top of config.yaml so we can develop before the ESP32-CAMs and the FPGA
+# arrive. Nothing here is part of the product.
+#
+#   EYE    laptop webcam + MediaPipe face mesh (whole face, not one eye up close)
+#   FRONT  laptop webcam too (shares the reader); distance from your face width.
+#          For "what am I looking at?", point it at a still image instead:
+#          --front sample:bus.jpg   (or any .jpg/.png/.mp4 path)
+#   REAR   software LGMD on lgmd.py's synthetic looming square (until tools/mock_fpga.py exists)
+#
+# Sources: webcam index, MJPEG URL (mock_glasses.py serves :81/stream), video file (looped),
+# image file (repeated), "sample:<name>" (images bundled with ultralytics: bus.jpg, zidane.jpg),
+# or "synthetic".
+
+cameras:
+  eye:
+    source: 0
+  front:
+    source: 0
+  rear:
+    source: synthetic
+
+eye:
+  method: facemesh        # DEV ONLY stand-in for the close-up eye camera
+  default_baseline: 0.28  # typical open-eye EAR
+
+distance:
+  method: face            # DEV ONLY: the webcam looks at you, not at a screen
+
+rear:
+  mode: software          # until tools/mock_fpga.py + backend/rear/ exist

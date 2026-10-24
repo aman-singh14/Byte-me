@@ -3,17 +3,19 @@
 Two layers, so the eye camera can change without touching anything else:
 
   extractor  frame -> EyeFeatures(openness, pupil)      swappable per camera
-             FaceMeshEyes: webcam sees the whole face, openness = Eye Aspect Ratio
-             CloseupEye:   ESP32 ~3 cm from one eye, dark-pupil threshold + ellipse fit,
-                           openness = visible pupil height / width (the lid covers it)
+             CloseupEye:   THE PRODUCT. EYE ESP32-CAM ~3 cm from one eye, dark-pupil
+                           threshold + ellipse fit, openness = visible pupil height / width
+                           (the lid covers it)
+             FaceMeshEyes: DEV ONLY. A laptop webcam sees the whole face, openness = Eye
+                           Aspect Ratio. Lets us test before the eye camera arrives.
   detector   openness over time -> blinks, blinks/min, squint      same for both
 
 The detector only sees openness / baseline, where the baseline is the median
 openness recorded during calibration (eyes open, looking normally). That ratio
 means the same thing for both extractors, so the thresholds carry over.
 
-    python -m backend.eye_tracking                 # webcam 0, live window
-    python -m backend.eye_tracking --source clip.mp4 --method closeup
+    python -m backend.eye_tracking                         # EYE camera stream from config.yaml
+    python -m backend.eye_tracking --dev                   # DEV: laptop webcam + face mesh
 """
 
 import argparse
@@ -60,7 +62,8 @@ def iris_offset(pts, idx, iris):
 
 
 class FaceMeshEyes:
-    """Whole face in view (laptop webcam). Openness = mean EAR of both eyes."""
+    """DEV ONLY: whole face in view on a laptop webcam. Openness = mean EAR of both eyes.
+    The product's eye camera sees one eye up close; that is CloseupEye."""
 
     name = "facemesh"
 
@@ -82,7 +85,7 @@ class FaceMeshEyes:
 
 
 class CloseupEye:
-    """Camera ~3 cm from one eye (IR or plain). The pupil is the darkest blob.
+    """THE PRODUCT's eye method: EYE ESP32-CAM ~3 cm from one eye. The pupil is the darkest blob.
 
     Openness is the visible pupil's height / width from an ellipse fit: about 1
     for an open eye, dropping as the lid covers the pupil, 0 when no pupil is
@@ -233,7 +236,7 @@ class EyeTracker:
     def __init__(self, cfg, extractor=None):
         e = cfg.get("eye", {})
         if extractor is None:
-            extractor = CloseupEye() if e.get("method") == "closeup" else FaceMeshEyes()
+            extractor = FaceMeshEyes() if e.get("method") == "facemesh" else CloseupEye()
         self.extractor = extractor
         self.detector = BlinkSquintDetector(**e)
         self.features = None
@@ -286,10 +289,11 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description="Live blink / squint / pupil tracking")
     ap.add_argument("--source", default=None, help="camera source (default: cameras.eye in config)")
-    ap.add_argument("--method", choices=("facemesh", "closeup"), default=None)
+    ap.add_argument("--method", choices=("closeup", "facemesh"), default=None, help="facemesh is DEV ONLY")
+    ap.add_argument("--dev", action="store_true", help="use config.dev.yaml stand-ins (webcam + face mesh)")
     ap.add_argument("--image", help="run once on a still image and print the features")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    cfg = load_config(dev=args.dev)
     if args.method:
         cfg["eye"]["method"] = args.method
     tracker = EyeTracker(cfg)

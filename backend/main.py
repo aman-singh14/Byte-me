@@ -1,8 +1,9 @@
 """Runs every pipeline plus the API in one process.
 
-    python -m backend.main                     # cameras from backend/config.yaml, API on :8000
-    python -m backend.main --preview           # also show annotated camera windows
-    python -m backend.main --eye 0 --front 0 --rear http://rear-cam.local:81/stream
+    python -m backend.main                     # the product: ESP32-CAM streams + FPGA rear events
+    python -m backend.main --dev               # no hardware: webcam / still images / synthetic stand-ins
+    python -m backend.main --dev --preview     # also show annotated camera windows
+    python -m backend.main --dev --front sample:bus.jpg
 
 Threads: one stream reader per distinct source, one pipeline per camera (eye and
 front share one when they use the same source, so Face Mesh runs once per
@@ -76,7 +77,10 @@ class Runtime:
         self.shared_face = (eye_reader is front_reader and isinstance(self.eye.extractor, FaceMeshEyes)
                             and cfg["distance"].get("method", "face") == "face")
         self.distance = DistanceEstimator(cfg, face_mesh=self.eye.extractor.mesh if self.shared_face else None)
-        self.rear = RearAlert(cfg)
+        self.rear_mode = cfg.get("rear", {}).get("mode", "fpga")
+        # rear.mode: software runs lgmd.py on a rear stream; fpga mode gets events instead (backend/rear).
+        self.rear = RearAlert(cfg) if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None
+        self.camera_state = {}                         # camera name -> "online" | "offline"
 
     # -- state shared with the API --------------------------------------------
 
@@ -104,11 +108,11 @@ class Runtime:
             self._event_id += 1
             self.recent.append((self._event_id, {"id": self._event_id, "ts": t, "kind": kind, "data": data}))
         if kind != "blink":
-            print(f"[event] {kind} {data if data is not None else ''}")
+            print(f"[event] {kind} {data if data is not None else ''}\n", end="")   # one write: no interleaving
         if self.bridge:
             if kind == "blink":
                 self.bridge.on_blink()
-            elif kind == "alert":
+            elif kind == "alert" and self.rear is not None:
                 k_left, _, k_right = lgmd.wearer_sides(self.rear.out, self.rear.flip)
                 self.bridge.on_alert(data["side"], data["k"], k_left, k_right)
 
@@ -143,13 +147,35 @@ class Runtime:
         for kind, data in events:
             self.emit(kind, data, t)
 
+    def _set_camera_state(self, cams, state, source):
+        """Track online/offline per camera; on offline, clear that camera's live values
+        so the dashboard never shows numbers from a dead stream."""
+        changed = [c for c in cams if self.camera_state.get(c) != state]
+        if not changed:
+            return
+        for c in changed:
+            self.camera_state[c] = state
+        if state == "offline":
+            if "eye" in changed:
+                self._update_live(eye_detected=False, openness=None, openness_ratio=None, pupil=None)
+            if "front" in changed:
+                self._update_live(distance_cm=None, too_close=False, too_close_for_s=0)
+        self._update_live(cameras=dict(self.camera_state))
+        for c in changed:
+            self.emit(f"camera_{state}", {"camera": c, "source": source})
+
     def _loop(self, name, reader, steps, annotators):
+        cams = name.split("+")
+        label = " + ".join(c.upper() for c in cams)
         seq, min_dt, last = 0, 1.0 / self.fps, 0.0
         while not self._stop.is_set():
             seq, frame, t = reader.wait_new(seq, timeout=0.5)
-            if frame is None:
-                self.frames[name] = blank(f"{name}: waiting for {reader.status()['source']}")
+            st = reader.status()
+            if frame is None or not st["ok"]:
+                self._set_camera_state(cams, "offline", st["source"])
+                self.frames[name] = blank(f"{label} camera offline - retrying {st['source']}")
                 continue
+            self._set_camera_state(cams, "online", st["active"])
             if t - last < min_dt:
                 continue
             last = t
@@ -181,7 +207,10 @@ class Runtime:
         else:
             loops.append(("eye", s.get("eye"), [self._eye_step], [self.eye.annotate]))
             loops.append(("front", s.get("front"), [self._front_step], [self.distance.annotate]))
-        loops.append(("rear", s.get("rear"), [self._rear_step], [self.rear.annotate]))
+        if self.rear is not None:
+            loops.append(("rear", s.get("rear"), [self._rear_step], [self.rear.annotate]))
+        elif self.rear_mode == "fpga":
+            print("[rear] fpga mode: rear warnings come from FPGA events (docs/rear_event_protocol.md)")
         for name, reader, steps, ann in loops:
             threading.Thread(target=self._loop, args=(name, reader, steps, ann), name=name, daemon=True).start()
         self.pipeline_names = [n for n, *_ in loops]
@@ -192,7 +221,8 @@ class Runtime:
             MacAppTracker(self.db, self.cfg["screentime"].get("poll_s", 5)).start()
         if self.cfg.get("app_bridge", {}).get("enabled"):
             from backend.app_bridge import AppBridge
-            self.bridge = AppBridge(self.cfg, self.live, s.get("rear")).start()
+            rear_reader = s.get("rear") if self.rear is not None else None
+            self.bridge = AppBridge(self.cfg, self.live, rear_reader).start()
         return self
 
     def frame(self, name):
@@ -218,6 +248,8 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description="Mega Glasses backend: pipelines + API")
     ap.add_argument("--config", default=None, help="config file (default backend/config.yaml)")
+    ap.add_argument("--dev", action="store_true",
+                    help="dev mode: merge backend/config.dev.yaml (webcam / still image / synthetic stand-ins)")
     ap.add_argument("--eye", help="override cameras.eye.source")
     ap.add_argument("--front", help="override cameras.front.source")
     ap.add_argument("--rear", help="override cameras.rear.source")
@@ -228,10 +260,15 @@ def main(argv=None):
     ap.add_argument("--preview", action="store_true", help="show annotated camera windows")
     args = ap.parse_args(argv)
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, dev=args.dev)
     for cam in ("eye", "front", "rear"):
         if getattr(args, cam) is not None:
-            cfg["cameras"][cam]["source"] = getattr(args, cam)
+            cfg["cameras"].setdefault(cam, {})["source"] = getattr(args, cam)
+    print(f"[mode] {'DEV (stand-in cameras, not the product)' if args.dev else 'product'}: "
+          + ", ".join(f"{k}={v.get('source')}" for k, v in cfg["cameras"].items())
+          + f", rear.mode={cfg['rear'].get('mode')}")
+    if not args.dev and (cfg["eye"].get("method") == "facemesh" or cfg["distance"].get("method") == "face"):
+        print("[mode] warning: facemesh eye tracking / face-width distance are DEV ONLY methods")
     if args.port:
         cfg["api"]["port"] = args.port
     if args.phone:

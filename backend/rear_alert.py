@@ -1,4 +1,7 @@
-"""Rear camera -> LGMD (lgmd.py, unchanged) -> spoken warning.
+"""rear.mode: software. Rear camera stream -> LGMD (lgmd.py, unchanged) -> spoken warning.
+
+The product runs LGMD on the FPGA instead (rear.mode: fpga, docs/rear_event_protocol.md).
+This path stays as a fallback and for development.
 
 Every rear frame is reduced with lgmd.preprocess to 80x60 gray and fed to
 lgmd.lgmd_step, so this runs exactly the integer model the ESP32 and FPGA ports
@@ -160,11 +163,11 @@ def main(argv=None):
     from backend.streams import FrameReader
 
     ap = argparse.ArgumentParser(description="Rear collision warning from LGMD")
-    ap.add_argument("--source", default=None, help="camera source (default: cameras.rear in config)")
+    ap.add_argument("--source", default=None, help="camera source (default: cameras.rear in config.dev.yaml)")
     ap.add_argument("--headless", type=float, metavar="SECONDS", help="no window, run this long")
     ap.add_argument("--yolo", action="store_true", help="name the approaching object (needs ultralytics)")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    cfg = load_config(dev=True)
     if args.yolo:
         cfg["rear"]["yolo"]["enabled"] = True
     alert = RearAlert(cfg)

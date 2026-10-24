@@ -3,16 +3,20 @@
     distance_cm = focal_px * real_width_cm / width_px
 
 Two references (config distance.method):
-  face    the camera sees the wearer's face (laptop webcam demo): cheek-to-cheek
-          width from Face Mesh landmarks 234 and 454. Camera-to-face = face-to-screen.
-  object  the camera sees the screen (glasses front camera): the largest bright
-          quadrilateral in view, with a known real width (object_width_cm).
+  object  THE PRODUCT. The FRONT camera on the glasses looks outward at the laptop or
+          phone: the largest bright quadrilateral in view, with a known real width
+          per device (object_width_cm.laptop / .phone).
+  face    DEV ONLY. A laptop webcam looking at you: cheek-to-cheek width from Face Mesh
+          landmarks 234 and 454 (camera-to-face = face-to-screen).
+
+focal_px is a property of the camera, so one calibration covers both devices.
 
 focal_px comes from the webcam's field of view until a one-time calibration:
 stand at a known distance and call calibrate(known_cm) (POST /calibrate/distance).
 The result is saved in backend/data/calibration.json.
 
-    python -m backend.distance                  # live window, [k] calibrates at 50 cm
+    python -m backend.distance                  # FRONT camera stream, [k] calibrates at 50 cm
+    python -m backend.distance --dev            # DEV: laptop webcam + face width
 """
 
 import argparse
@@ -70,10 +74,11 @@ def find_screen(frame):
 class DistanceEstimator:
     def __init__(self, cfg, face_mesh=None):
         d = cfg.get("distance", {})
-        self.method = d.get("method", "face")
+        self.method = d.get("method", "object")
         self.device = d.get("device", "laptop")
         self.thresholds = d.get("too_close_cm", {"laptop": 50, "phone": 30})
-        self.real_cm = d.get("face_width_cm", 14.0) if self.method == "face" else d.get("object_width_cm", 30.0)
+        self.face_cm = d.get("face_width_cm", 14.0)
+        self.object_cm = d.get("object_width_cm", {"laptop": 30.0, "phone": 7.0})
         self.hfov = d.get("hfov_deg", 65)
         self.alpha = d.get("smoothing", 0.3)
         self.focal = d.get("focal_px") or load_calibration().get(f"focal_px_{self.method}")
@@ -85,6 +90,15 @@ class DistanceEstimator:
         self.too_close_since = None
         self.box = None
         self.state = {}
+
+    @property
+    def real_cm(self):
+        """Real width of the reference: the wearer's face (dev) or the current device's screen."""
+        if self.method == "face":
+            return self.face_cm
+        if isinstance(self.object_cm, dict):
+            return self.object_cm.get(self.device, 30.0)
+        return self.object_cm
 
     @property
     def threshold_cm(self):
@@ -182,11 +196,12 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description="Live distance to screen")
     ap.add_argument("--source", default=None, help="camera source (default: cameras.front in config)")
-    ap.add_argument("--method", choices=("face", "object"), default=None)
+    ap.add_argument("--method", choices=("object", "face"), default=None, help="face is DEV ONLY")
+    ap.add_argument("--dev", action="store_true", help="use config.dev.yaml stand-ins (webcam + face width)")
     ap.add_argument("--calib-cm", type=float, default=50.0, help="known distance used by [k]")
     ap.add_argument("--image", help="run once on a still image and print the result")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    cfg = load_config(dev=args.dev)
     if args.method:
         cfg["distance"]["method"] = args.method
     est = DistanceEstimator(cfg)

@@ -81,12 +81,15 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
 .cams img { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 4 / 3; object-fit: cover; }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink);
   color: var(--page); padding: 10px 16px; border-radius: 8px; font-size: 14px; display: none; z-index: 5; }
+.offline-banner { display: none; background: var(--warning); color: #0b0b0b; font-weight: 600;
+  padding: 10px 20px; text-align: center; }
 .alert-banner { display: none; background: var(--critical); color: #fff; font-weight: 700; font-size: 18px;
   padding: 14px 20px; text-align: center; }
 </style>
 </head>
 <body>
 <div class="alert-banner" id="banner" role="alert"></div>
+<div class="offline-banner" id="offline-banner" role="status"></div>
 <header>
   <h1>Mega Glasses</h1>
   <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn">connecting</span></span>
@@ -193,9 +196,8 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
     <div class="card c12">
       <details id="cams-details"><summary><strong>Camera previews</strong> (annotated; uses bandwidth)</summary>
         <div class="cams" style="margin-top:12px">
-          <div><div class="label">Eye</div><img data-src="stream/eye" alt="Eye camera with landmarks"></div>
-          <div><div class="label">Front</div><img data-src="stream/front" alt="Front camera with distance"></div>
-          <div><div class="label">Rear</div><img data-src="stream/rear" alt="Rear camera with LGMD state"></div>
+          <div><div class="label">Eye camera</div><img data-src="stream/eye" alt="Eye camera with pupil tracking"></div>
+          <div><div class="label">Front camera</div><img data-src="stream/front" alt="Front camera with distance"></div>
         </div>
         <p class="note" id="cams-status"></p>
       </details>
@@ -349,8 +351,15 @@ function barChart(host, rows, {unit, emptyText}) {
 // ---------------------------------------------------------------- live
 function renderLive(d) {
   live = d;
+  const cams = d.cameras || {};
+  const eyeOff = cams.eye === "offline", frontOff = cams.front === "offline";
+  const off = Object.keys(cams).filter(c => cams[c] === "offline").map(c => c.toUpperCase());
+  const ob = $("offline-banner");
+  if (off.length) { text(ob, `${off.join(" and ")} camera offline. Retrying…`); ob.style.display = "block"; }
+  else ob.style.display = "none";
   text($("blink"), d.blink_rate == null ? "–" : Math.round(d.blink_rate));
   $("blink-note").replaceChildren(
+    eyeOff ? statusBadge("warning", "EYE camera offline") :
     d.calibrating ? document.createTextNode("Calibrating: eyes open, look at the screen") :
     !d.eye_detected ? document.createTextNode("No eye in view") :
     d.blink_rate == null ? document.createTextNode("Measuring… (needs 10 s)") :
@@ -358,7 +367,8 @@ function renderLive(d) {
   text($("dist"), d.distance_cm == null ? "–" : Math.round(d.distance_cm));
   threshold = d.threshold_cm || threshold;
   $("dist-note").replaceChildren(
-    d.distance_cm == null ? document.createTextNode("No reference in view") :
+    frontOff ? statusBadge("warning", "FRONT camera offline") :
+    d.distance_cm == null ? document.createTextNode("No screen in view") :
     d.too_close ? statusBadge("critical", `Too close (< ${d.threshold_cm} cm, ${Math.round(d.too_close_for_s)} s)`) :
     statusBadge("good", `OK (≥ ${d.threshold_cm} cm${d.distance_calibrated ? "" : ", uncalibrated"})`));
   text($("squint"), !d.eye_detected ? "–" : d.squinting ? "Squinting" : "Relaxed");

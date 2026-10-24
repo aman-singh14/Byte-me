@@ -1,10 +1,13 @@
 """Threaded camera readers that always hand out the newest frame.
 
-A source is a webcam index (0), a stream URL (http://front-cam.local:81/stream),
-a video file (looped) or "synthetic" (lgmd.py's looming square, looped). For a
-fake ESP32 over the network, run mock_glasses.py and use its URL. If the
-source dies, the reader switches to the fallback source and keeps retrying the
-primary every reconnect_s. Cameras that name the same source share one reader.
+In the product every source is an ESP32-CAM MJPEG URL (http://eye-cam.local:81/stream).
+Dev stand-ins: a webcam index (0), a video file (looped), an image file (repeated),
+"sample:bus.jpg" (images bundled with ultralytics) or "synthetic" (lgmd.py's looming
+square). For a fake ESP32 over the network, run mock_glasses.py and use its URL.
+
+If a source dies, the reader uses its fallback (if any; the product config has none)
+and keeps retrying the primary every reconnect_s. Cameras that name the same source
+share one reader.
 
     python -m backend.streams 0                 # show one source
     python -m backend.streams --config          # show every camera in config.yaml
@@ -22,6 +25,9 @@ import lgmd
 
 SYNTHETIC = "synthetic"
 SYNTH_FPS = 15
+STREAM_PREFIXES = ("http://", "https://", "rtsp://")
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+STILL_FPS = 15
 
 
 def synthetic_frames():
@@ -45,23 +51,42 @@ def describe(src):
     return f"webcam {src}" if isinstance(src, int) else str(src)
 
 
+def resolve_sample(src):
+    """'sample:bus.jpg' -> path of an image bundled with ultralytics (dev stand-in)."""
+    if not (isinstance(src, str) and src.startswith("sample:")):
+        return src
+    try:
+        import ultralytics
+    except ImportError:
+        return src
+    return str(Path(ultralytics.__file__).parent / "assets" / src.split(":", 1)[1])
+
+
+def is_stream(src):
+    return isinstance(src, str) and src.startswith(STREAM_PREFIXES)
+
+
 class _Capture:
     """One opened source. read() returns a BGR frame or None."""
 
     def __init__(self, src, width, height):
         self.src = src
         self.cap = None
+        self.still = None
         self.synth = synthetic_frames() if src == SYNTHETIC else None
-        self.is_file = isinstance(src, str) and src != SYNTHETIC and not src.startswith(
-            ("http://", "https://", "rtsp://")) and Path(src).exists()
+        path = resolve_sample(src)
+        self.is_file = isinstance(path, str) and src != SYNTHETIC and not is_stream(path) and Path(path).exists()
         if src == SYNTHETIC:
             return
-        if isinstance(src, str) and src.startswith(("http://", "https://", "rtsp://")):
+        if self.is_file and Path(path).suffix.lower() in IMAGE_EXTS:
+            self.still = cv2.imread(path)   # OpenCV's capture gives an image only once
+            return
+        if is_stream(src):
             # Without timeouts a dead ESP32 can block read() for ~30 s.
             self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000,
                                                               cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000])
         else:
-            self.cap = cv2.VideoCapture(src)
+            self.cap = cv2.VideoCapture(path)
         if isinstance(src, int):
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -69,12 +94,19 @@ class _Capture:
         self.file_delay = 1.0 / (self.cap.get(cv2.CAP_PROP_FPS) or 30.0) if self.is_file else 0
 
     def opened(self):
-        return self.src == SYNTHETIC or (self.cap is not None and self.cap.isOpened())
+        if self.src == SYNTHETIC:
+            return True
+        if self.is_file and self.cap is None:
+            return self.still is not None
+        return self.cap is not None and self.cap.isOpened()
 
     def read(self):
         if self.src == SYNTHETIC:
             time.sleep(1 / SYNTH_FPS)
             return next(self.synth).copy()
+        if self.still is not None:
+            time.sleep(1 / STILL_FPS)
+            return self.still.copy()
         ok, img = self.cap.read()
         if not ok and self.is_file:      # loop video files
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -242,12 +274,13 @@ def main(argv=None):
     ap.add_argument("source", nargs="?", help="webcam index, URL, file or 'synthetic'")
     ap.add_argument("--fallback", default=None)
     ap.add_argument("--config", action="store_true", help="open every camera in config.yaml")
+    ap.add_argument("--dev", action="store_true", help="with --config: use the config.dev.yaml stand-ins")
     ap.add_argument("--headless", type=float, metavar="SECONDS",
                     help="no window: print status for this many seconds")
     args = ap.parse_args(argv)
 
     if args.config or args.source is None:
-        mgr = StreamManager(load_config())
+        mgr = StreamManager(load_config(dev=args.dev))
         readers = mgr.cameras
     else:
         readers = {"cam": FrameReader(args.source, args.fallback)}
