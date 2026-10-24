@@ -142,8 +142,14 @@ class AlertService extends ChangeNotifier {
           link.send(AlertCommand(side: alert.side, level: alert.level.wire, label: alert.label));
         case AlertCleared():
           link.send(const StopCommand());
-        case PossiblyFollowing():
-          _following = e; // shown and spoken, no buzz
+        case PossiblyFollowing(:final update, :final presence):
+          // Shown and spoken, no buzz. An update only refreshes a notice
+          // that's still up; a dismissed one stays dismissed.
+          if (!update) {
+            _following = e;
+          } else if (_following?.presence == presence) {
+            _following = e;
+          }
       }
       debugPrint('AlertService: $e');
       log.record(now, e);

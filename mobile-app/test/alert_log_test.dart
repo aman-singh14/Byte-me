@@ -60,6 +60,16 @@ void main() {
     expect(e.nearMiss, isFalse);
   });
 
+  test('a following update keeps one entry current', () {
+    final log = AlertLog();
+    log.record(at(0), const PossiblyFollowing(WearerSide.left, Duration(minutes: 3), presence: 7));
+    log.record(at(60), const PossiblyFollowing(WearerSide.behind, Duration(minutes: 4), presence: 7, update: true));
+    expect(log.entries.single.behindFor, const Duration(minutes: 4));
+    expect(log.entries.single.side, WearerSide.behind);
+    log.record(at(90), const PossiblyFollowing(WearerSide.right, Duration(minutes: 3), presence: 9));
+    expect(log.entries, hasLength(2)); // someone else
+  });
+
   test('keeps 7 days and at most maxEntries', () {
     final log = AlertLog(maxEntries: 3);
     for (var i = 0; i < 5; i++) {

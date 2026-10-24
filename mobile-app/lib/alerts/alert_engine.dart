@@ -147,14 +147,21 @@ class AlertCleared extends AlertEvent {
 }
 
 /// The same person has stayed behind the wearer for [behindFor]. Reported
-/// once per presence. Based only on how long someone has been there, not on
-/// who they are.
+/// once per presence, then again as an [update] each further minute they
+/// stay, so the notice and log keep the real time. Based only on how long
+/// someone has been there, not on who they are.
 class PossiblyFollowing extends AlertEvent {
-  const PossiblyFollowing(this.side, this.behindFor);
+  const PossiblyFollowing(this.side, this.behindFor, {this.presence, this.update = false});
   final WearerSide side;
   final Duration behindFor;
+
+  /// Which presence this is about (a track id), to match updates.
+  final int? presence;
+
+  /// A later minute of a presence already reported: refresh, don't announce.
+  final bool update;
   @override
-  String toString() => 'PossiblyFollowing(${side.name}, ${behindFor.inSeconds} s)';
+  String toString() => 'PossiblyFollowing(${side.name}, ${behindFor.inSeconds} s${update ? ', update' : ''})';
 }
 
 class AlertEngine {
@@ -264,9 +271,16 @@ class AlertEngine {
       }
 
       final behindFor = at.difference(t.behindSince);
-      if (t.label == 'person' && !t.followingReported && behindFor >= settings.followAfter) {
-        t.followingReported = true;
-        events.add(PossiblyFollowing(t.side, behindFor));
+      if (t.label == 'person' && behindFor >= settings.followAfter) {
+        final minutes = behindFor.inMinutes;
+        if (!t.followingReported) {
+          t.followingReported = true;
+          t.followingMinutes = minutes;
+          events.add(PossiblyFollowing(t.side, behindFor, presence: t.presence));
+        } else if (minutes > t.followingMinutes) {
+          t.followingMinutes = minutes;
+          events.add(PossiblyFollowing(t.side, behindFor, presence: t.presence, update: true));
+        }
       }
     }
     return events..addAll(_evaluate(at));

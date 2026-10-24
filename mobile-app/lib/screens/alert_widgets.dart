@@ -127,6 +127,8 @@ class _AlertAnnouncerState extends State<AlertAnnouncer> {
         } else {
           speak();
         }
+      case PossiblyFollowing(update: true):
+        break; // the card's time updates quietly
       case PossiblyFollowing():
         final sentence = FollowingCard(notice: e).sentence;
         announce(context, sentence);

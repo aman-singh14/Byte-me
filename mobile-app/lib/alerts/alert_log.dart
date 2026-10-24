@@ -89,6 +89,8 @@ class AlertLog {
   final _entries = <LogEntry>[]; // oldest first
   LogEntry? _open; // the alert currently going on
   int? _openTrack; // its camera track, if any
+  LogEntry? _following; // the latest "possibly following" entry
+  int? _followingPresence; // its presence, for updates
 
   /// Newest first.
   List<LogEntry> get entries => _entries.reversed.toList(growable: false);
@@ -111,8 +113,17 @@ class AlertLog {
         open.ended = reason;
         _open = null;
         _openTrack = null;
-      case PossiblyFollowing(:final side, :final behindFor):
-        _add(LogEntry(kind: LogKind.following, at: at, side: side, label: 'person', behindFor: behindFor));
+      case PossiblyFollowing(:final side, :final behindFor, :final presence, :final update):
+        final last = _following;
+        if (update && last != null && presence == _followingPresence && _entries.contains(last)) {
+          last.behindFor = behindFor; // still there: one entry, kept current
+          last.side = side;
+        } else {
+          _following = _add(
+            LogEntry(kind: LogKind.following, at: at, side: side, label: 'person', behindFor: behindFor),
+          );
+          _followingPresence = presence;
+        }
     }
     _prune(at);
     return true;
@@ -122,6 +133,8 @@ class AlertLog {
     _entries.clear();
     _open = null;
     _openTrack = null;
+    _following = null;
+    _followingPresence = null;
   }
 
   List<Object?> toJson() => [for (final e in _entries) e.toJson()];

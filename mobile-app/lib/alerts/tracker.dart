@@ -69,7 +69,9 @@ class Sighting {
 
 /// One object followed across frames.
 class Track {
-  Track._(this.id, this.label, this.box, this.confidence, DateTime at, {required this.behindSince}) : lastSeen = at {
+  Track._(this.id, this.label, this.box, this.confidence, DateTime at, {required this.behindSince})
+    : lastSeen = at,
+      presence = id {
     _measure(at);
   }
 
@@ -85,8 +87,16 @@ class Track {
   /// for "possibly following". It describes presence, never identity.
   DateTime behindSince;
 
+  /// The id of the first track in this presence (this track, or the
+  /// earliest one it continues).
+  int presence;
+
   /// Set once "possibly following" has been reported for this presence.
   bool followingReported = false;
+
+  /// Whole minutes behind when it was last reported, for the per-minute
+  /// updates.
+  int followingMinutes = 0;
 
   final _heights = _SizeHistory();
   final _widths = _SizeHistory();
@@ -277,7 +287,9 @@ class Tracker {
     if (continues != null) {
       _lost.remove(continues);
       track.behindSince = continues.behindSince;
+      track.presence = continues.presence;
       track.followingReported = continues.followingReported;
+      track.followingMinutes = continues.followingMinutes;
     }
     return track;
   }

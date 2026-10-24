@@ -343,15 +343,18 @@ void main() {
       return events;
     }
 
-    test('someone behind for 3 minutes is reported once, despite short gaps', () {
+    test('someone behind for 3 minutes is reported once, then updated each minute', () {
       final engine = AlertEngine();
       final events = [
         ...stayBehind(engine, from: 0, to: 60),
         ...wait(engine, from: 60.1, to: 65), // lost for 5 s
-        ...stayBehind(engine, from: 65, to: 240),
+        ...stayBehind(engine, from: 65, to: 300),
       ];
-      expect(only(events), [isA<PossiblyFollowing>().having((e) => e.side, 'side', WearerSide.right)]);
-      expect(events.single.$1, closeTo(180, 0.5));
+      final following = only(events).cast<PossiblyFollowing>();
+      expect([for (final e in following) (e.behindFor.inMinutes, e.update)], [(3, false), (4, true), (5, true)]);
+      expect(following.first.side, WearerSide.right);
+      expect(following.map((e) => e.presence).toSet(), hasLength(1)); // the same presence across the gap
+      expect(events.first.$1, closeTo(180, 0.5));
     });
 
     test('a new presence after a long gap starts over', () {
