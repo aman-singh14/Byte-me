@@ -35,10 +35,13 @@ eye:
   method: closeup         # closeup: dark-pupil tracking, camera ~3 cm from one eye (the product)
                           # facemesh: DEV ONLY, whole face on a laptop webcam
   calibration_s: 5.0      # record the open-eye baseline this long at start (and on POST /calibrate/eye)
-  default_baseline: 0.9   # openness used until calibration finishes (closeup: pupil height / width)
-  blink_ratio: 0.65       # openness / baseline below this = eye closed
-  blink_min_s: 0.05       # a closure this short is noise
-  blink_max_s: 0.5        # a closure this long is not a blink (eyes shut, looking down)
+  default_baseline: 1.0   # openness used until calibration finishes (closeup: visible pupil area / full)
+  blink_ratio: 0.65       # openness / baseline below this = eye closed (pupil mostly or fully covered)
+  blink_min_frames: 2     # a blink = closed for 2..7 frames (at the eye camera's ~10-20 fps)
+  blink_max_frames: 7
+  blink_min_s: 0.05       # used only when blink_*_frames are null (dev webcam)
+  blink_max_s: 0.5
+  presence_s: 2.0         # no pupil for longer than this = eye not in view (not a closed eye)
   squint_low: 0.65        # squint = openness / baseline between squint_low and squint_high...
   squint_high: 0.85
   squint_min_s: 1.5       # ...for at least this long

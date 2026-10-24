@@ -9,6 +9,8 @@
 #          --front sample:bus.jpg   (or any .jpg/.png/.mp4 path)
 #   REAR   software LGMD on lgmd.py's synthetic looming square (until tools/mock_fpga.py exists)
 #
+# To try the product's close-up eye method with no eye camera: --eye synthetic-eye --eye-method closeup
+#
 # Sources: webcam index, MJPEG URL (mock_glasses.py serves :81/stream), video file (looped),
 # image file (repeated), "sample:<name>" (images bundled with ultralytics: bus.jpg, zidane.jpg),
 # or "synthetic".
@@ -24,6 +26,8 @@ cameras:
 eye:
   method: facemesh        # DEV ONLY stand-in for the close-up eye camera
   default_baseline: 0.28  # typical open-eye EAR
+  blink_min_frames: null  # a 30 fps webcam: time blinks in seconds instead (blink_min_s / blink_max_s)
+  blink_max_frames: null
 
 distance:
   method: face            # DEV ONLY: the webcam looks at you, not at a screen

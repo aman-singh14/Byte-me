@@ -253,6 +253,8 @@ def main(argv=None):
     ap.add_argument("--eye", help="override cameras.eye.source")
     ap.add_argument("--front", help="override cameras.front.source")
     ap.add_argument("--rear", help="override cameras.rear.source")
+    ap.add_argument("--eye-method", choices=("closeup", "facemesh"),
+                    help="override eye.method (e.g. --dev --eye synthetic-eye --eye-method closeup)")
     ap.add_argument("--port", type=int, help="override api.port")
     ap.add_argument("--phone", help="override app_bridge.phone_ip")
     ap.add_argument("--speech", choices=("auto", "say", "pyttsx3", "print", "off"),
@@ -264,6 +266,11 @@ def main(argv=None):
     for cam in ("eye", "front", "rear"):
         if getattr(args, cam) is not None:
             cfg["cameras"].setdefault(cam, {})["source"] = getattr(args, cam)
+    if args.eye_method == "closeup":
+        # Product eye settings, even on top of the dev overlay.
+        cfg["eye"].update(method="closeup", default_baseline=1.0, blink_min_frames=2, blink_max_frames=7)
+    elif args.eye_method:
+        cfg["eye"]["method"] = args.eye_method
     print(f"[mode] {'DEV (stand-in cameras, not the product)' if args.dev else 'product'}: "
           + ", ".join(f"{k}={v.get('source')}" for k, v in cfg["cameras"].items())
           + f", rear.mode={cfg['rear'].get('mode')}")

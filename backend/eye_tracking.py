@@ -85,55 +85,141 @@ class FaceMeshEyes:
 
 
 class CloseupEye:
-    """THE PRODUCT's eye method: EYE ESP32-CAM ~3 cm from one eye. The pupil is the darkest blob.
+    """THE PRODUCT's eye method: EYE ESP32-CAM ~3 cm from one eye, below and to the side.
 
-    Openness is the visible pupil's height / width from an ellipse fit: about 1
-    for an open eye, dropping as the lid covers the pupil, 0 when no pupil is
-    found. Untested on the real eye camera yet; tune dark_offset and the area
-    limits on the first footage.
+    Dark-pupil tracking:
+      1. search near the last pupil (or the whole frame when lost);
+      2. threshold just above the darkest pixels (adaptive: a low percentile + offset),
+         but never far above the pupil's own learned darkness, so when the lid hides
+         the pupil the iris (round, but much brighter and bigger) is not mistaken for it;
+      3. morphological opening removes thin eyelashes; filling each contour removes
+         the holes an IR glint punches into the pupil, and the convex hull removes
+         the notch a glint leaves on the edge;
+      4. pick the candidate that is round, dark, big enough and close to the last pupil.
+
+    Openness = visible pupil area / the pupil's full area (a high percentile of recent
+    areas, so blinks and squints do not drag it down). About 1 when open; the upper
+    lid covering the pupil lowers it (squint); 0 when no pupil is visible (blink, or the
+    eye is closed). Tested on synthetic close-up eyes (backend/synth_eye.py); tune
+    dark_offset and the area limits on the first real eye-camera footage.
     """
 
     name = "closeup"
 
-    def __init__(self, dark_offset=25, min_area_frac=0.002, max_area_frac=0.25):
+    def __init__(self, dark_offset=22, dark_percentile=1.0, min_area_frac=0.002, max_area_frac=0.2,
+                 min_circularity=0.55, ref_window=600):
         self.dark_offset = dark_offset
+        self.dark_percentile = dark_percentile
         self.min_area_frac = min_area_frac
         self.max_area_frac = max_area_frac
+        self.min_circularity = min_circularity
+        self._areas = collections.deque(maxlen=ref_window)   # recent visible areas (~40 s at 15 fps)
+        self.pupil_level = None      # learned mean gray level inside the pupil
+        self.last_center = None      # pixel center of the last pupil
+        self.last_radius = None
+        self.debug = {}
+
+    def ref_area(self):
+        """Full (unoccluded) pupil area: 90th percentile of recent areas."""
+        if not self._areas:
+            return None
+        return float(np.percentile(self._areas, 90))
+
+    def _candidates(self, gray, roi):
+        x0, y0, x1, y1 = roi
+        sub = gray[y0:y1, x0:x1]
+        thresh = float(np.percentile(sub, self.dark_percentile)) + self.dark_offset
+        if self.pupil_level is not None:
+            thresh = min(thresh, self.pupil_level + self.dark_offset)
+        _, mask = cv2.threshold(sub, thresh, 255, cv2.THRESH_BINARY_INV)
+        k = 5 if self.last_radius is None else int(np.clip(self.last_radius * 0.35, 3, 9)) | 1
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        h, w = gray.shape
+        out = []
+        for c in contours:
+            area = cv2.contourArea(c)        # filled contour: glint holes do not count against it
+            if not (self.min_area_frac * h * w <= area <= self.max_area_frac * h * w) or len(c) < 5:
+                continue
+            hull = cv2.convexHull(c)
+            hull_area = cv2.contourArea(hull)
+            perim = cv2.arcLength(hull, True)
+            circ = 4 * np.pi * hull_area / max(perim * perim, 1e-6)
+            c_full = c + (x0, y0)
+            m = np.zeros_like(gray)
+            cv2.drawContours(m, [c_full], -1, 255, -1)
+            level = float(cv2.mean(gray, mask=m)[0])
+            out.append({"contour": c_full, "hull": hull + (x0, y0), "area": hull_area, "circ": circ,
+                        "dark": 255 - level, "level": level})
+        return out, thresh
 
     def extract(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-        gray = cv2.GaussianBlur(gray, (7, 7), 0)
+        gray = cv2.medianBlur(gray, 5)
         h, w = gray.shape
-        thresh = int(gray.min()) + self.dark_offset
-        _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        area_min, area_max = self.min_area_frac * h * w, self.max_area_frac * h * w
-        blobs = [c for c in contours if area_min <= cv2.contourArea(c) <= area_max and len(c) >= 5]
-        if not blobs:
-            return EyeFeatures(0.0)   # no pupil visible: treat as closed
-        # Prefer round, large blobs (eyelashes and shadows are long and thin).
+        roi = (0, 0, w, h)
+        if self.last_center is not None and self.last_radius:
+            r = int(self.last_radius * 4)
+            cx, cy = self.last_center
+            roi = (max(0, int(cx - r)), max(0, int(cy - r)), min(w, int(cx + r)), min(h, int(cy + r)))
+        cands, thresh = self._candidates(gray, roi)
+        if not cands and roi != (0, 0, w, h):
+            cands, thresh = self._candidates(gray, (0, 0, w, h))     # lost it: search everywhere
+
+        ref = self.ref_area()
+
         def score(c):
-            (_, _), (a, b), _ = cv2.fitEllipse(c)
-            return cv2.contourArea(c) * min(a, b) / max(a, b, 1e-6)
-        best = max(blobs, key=score)
-        (cx, cy), (a, b), angle = cv2.fitEllipse(best)
-        x, y, bw, bh = cv2.boundingRect(best)
-        openness = bh / max(bw, 1)
+            s = c["circ"] * 2 + c["dark"] / 128
+            if ref:
+                s -= abs(np.log(max(c["area"], 1) / ref))           # about the size we expect
+            if self.last_center is not None:
+                d = np.hypot(*(np.mean(c["hull"].reshape(-1, 2), 0) - self.last_center))
+                s -= d / max(self.last_radius or 20, 1) * 0.3
+            return s
+
+        # A partly covered pupil is a flattened disc, so roundness is judged against
+        # what is left visible: allow lower circularity when the area is also reduced.
+        good = [c for c in cands if c["circ"] >= self.min_circularity
+                or (ref and c["area"] < 0.8 * ref and c["circ"] >= self.min_circularity * 0.6)]
+        if ref:                          # the pupil cannot be much bigger than the pupil
+            good = [c for c in good if c["area"] <= 1.6 * ref]
+        if self.pupil_level is not None:  # ...or much brighter than the pupil
+            good = [c for c in good if c["level"] <= self.pupil_level + 1.5 * self.dark_offset]
+        self.debug = {"thresh": thresh, "candidates": len(cands), "roi": roi}
+        if not good:
+            return EyeFeatures(0.0)      # no pupil visible: closed (blink) or not in view
+        best = max(good, key=score)
+        pts = best["hull"].reshape(-1, 2).astype(np.float32)
+        (cx, cy), radius = cv2.minEnclosingCircle(pts)
+        mom = cv2.moments(best["hull"])
+        if mom["m00"] > 0:
+            cx, cy = mom["m10"] / mom["m00"], mom["m01"] / mom["m00"]
+        self._areas.append(best["area"])
+        if best["area"] >= 0.7 * (ref or best["area"]):      # learn darkness from a mostly visible pupil
+            lvl = best["level"]
+            self.pupil_level = lvl if self.pupil_level is None else 0.95 * self.pupil_level + 0.05 * lvl
+        ref = self.ref_area()
+        openness = min(best["area"] / ref, 1.5) if ref else 1.0
+        self.last_center = np.array([cx, cy])
+        self.last_radius = float(np.sqrt(ref / np.pi)) if ref else radius
         pupil = (float(2 * cx / w - 1), float(2 * cy / h - 1))
-        return EyeFeatures(float(min(openness, 1.5)), pupil, best.reshape(-1, 2).astype(np.float32))
+        return EyeFeatures(float(openness), pupil, pts)
 
 
 class BlinkSquintDetector:
     """Openness over time -> blinks, blink rate, squint. Pure logic, no OpenCV."""
 
     def __init__(self, calibration_s=5.0, default_baseline=0.28, blink_ratio=0.65,
-                 blink_min_s=0.05, blink_max_s=0.5, squint_low=0.65, squint_high=0.85,
-                 squint_min_s=1.5, rate_window_s=60, **_ignored):
+                 blink_min_s=0.05, blink_max_s=0.5, blink_min_frames=None, blink_max_frames=None,
+                 squint_low=0.65, squint_high=0.85, squint_min_s=1.5, rate_window_s=60, **_ignored):
         self.calibration_s = calibration_s
         self.baseline = default_baseline
         self.blink_ratio = blink_ratio
         self.blink_min_s, self.blink_max_s = blink_min_s, blink_max_s
+        # Frame counts win when set (the product: 2-7 frames at the eye camera's rate);
+        # otherwise blinks are timed in seconds (dev webcam at 30 fps).
+        self.blink_min_frames, self.blink_max_frames = blink_min_frames, blink_max_frames
+        self._closed_frames = 0
         self.squint_low, self.squint_high, self.squint_min_s = squint_low, squint_high, squint_min_s
         self.rate_window_s = rate_window_s
         self.calibrated = False
@@ -172,7 +258,7 @@ class BlinkSquintDetector:
         if self._calib_pending:
             self._calib_pending = False
             self._calib_until = t + self.calibration_s
-        if self._calib_until is not None:
+        if self._calib_until is not None and openness > 0:   # no pupil = nothing to learn from
             self._calib.append(openness)
             if t >= self._calib_until:
                 self._calib_until = None
@@ -191,10 +277,17 @@ class BlinkSquintDetector:
         if closed:
             if self._closed_since is None:
                 self._closed_since = t
+                self._closed_frames = 0
+            self._closed_frames += 1
         elif self._closed_since is not None:
             dur = t - self._closed_since
+            n = self._closed_frames
             self._closed_since = None
-            if self.blink_min_s <= dur <= self.blink_max_s:
+            if self.blink_min_frames is not None:
+                ok = self.blink_min_frames <= n <= (self.blink_max_frames or 10 ** 9)
+            else:
+                ok = self.blink_min_s <= dur <= self.blink_max_s
+            if ok:
                 self.blinks.append(t)
                 self.total_blinks += 1
                 events.append(("blink", dur))
@@ -239,6 +332,8 @@ class EyeTracker:
             extractor = FaceMeshEyes() if e.get("method") == "facemesh" else CloseupEye()
         self.extractor = extractor
         self.detector = BlinkSquintDetector(**e)
+        self.presence_s = e.get("presence_s", 2.0)
+        self.last_seen = None        # last time a pupil/eye was actually seen
         self.features = None
         self.state = {}
 
@@ -248,12 +343,19 @@ class EyeTracker:
     def process(self, frame, t):
         f = self.extractor.extract(frame)
         self.features = f
-        events = self.detector.update(None if f is None else f.openness, t)
+        seen = f is not None and (f.pupil is not None or f.openness > 0)
+        if seen:
+            self.last_seen = t
+        present = self.last_seen is not None and t - self.last_seen <= self.presence_s
+        # No pupil right after seeing one = the lid is closed (counts toward a blink).
+        # No pupil for longer = the eye is not in view (glasses off): not a closure.
+        openness = f.openness if seen else (0.0 if present and f is not None else None)
+        events = self.detector.update(openness, t)
         d = self.detector
         rate = d.blink_rate(t)
         self.state = {
-            "eye_detected": f is not None,
-            "openness": None if f is None else round(f.openness, 4),
+            "eye_detected": present,
+            "openness": None if openness is None else round(openness, 4),
             "openness_ratio": None if d.ratio is None else round(d.ratio, 3),
             "baseline": round(d.baseline, 4),
             "calibrated": d.calibrated,

@@ -2,8 +2,8 @@
 
 In the product every source is an ESP32-CAM MJPEG URL (http://eye-cam.local:81/stream).
 Dev stand-ins: a webcam index (0), a video file (looped), an image file (repeated),
-"sample:bus.jpg" (images bundled with ultralytics) or "synthetic" (lgmd.py's looming
-square). For a fake ESP32 over the network, run mock_glasses.py and use its URL.
+"sample:bus.jpg" (images bundled with ultralytics), "synthetic" (lgmd.py's looming
+square) or "synthetic-eye" (a rendered close-up eye for the product's pupil tracker). For a fake ESP32 over the network, run mock_glasses.py and use its URL.
 
 If a source dies, the reader uses its fallback (if any; the product config has none)
 and keeps retrying the primary every reconnect_s. Cameras that name the same source
@@ -24,6 +24,7 @@ import numpy as np
 import lgmd
 
 SYNTHETIC = "synthetic"
+SYNTHETIC_EYE = "synthetic-eye"      # backend/synth_eye.py: close-up eye with blinks, squint, gaze
 SYNTH_FPS = 15
 STREAM_PREFIXES = ("http://", "https://", "rtsp://")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -73,10 +74,15 @@ class _Capture:
         self.src = src
         self.cap = None
         self.still = None
-        self.synth = synthetic_frames() if src == SYNTHETIC else None
-        path = resolve_sample(src)
-        self.is_file = isinstance(path, str) and src != SYNTHETIC and not is_stream(path) and Path(path).exists()
+        self.synth = None
         if src == SYNTHETIC:
+            self.synth = synthetic_frames()
+        elif src == SYNTHETIC_EYE:
+            from backend.synth_eye import SynthEyeSource
+            self.synth = SynthEyeSource(SYNTH_FPS)
+        path = resolve_sample(src)
+        self.is_file = isinstance(path, str) and self.synth is None and not is_stream(path) and Path(path).exists()
+        if self.synth is not None:
             return
         if self.is_file and Path(path).suffix.lower() in IMAGE_EXTS:
             self.still = cv2.imread(path)   # OpenCV's capture gives an image only once
@@ -94,14 +100,14 @@ class _Capture:
         self.file_delay = 1.0 / (self.cap.get(cv2.CAP_PROP_FPS) or 30.0) if self.is_file else 0
 
     def opened(self):
-        if self.src == SYNTHETIC:
+        if self.synth is not None:
             return True
         if self.is_file and self.cap is None:
             return self.still is not None
         return self.cap is not None and self.cap.isOpened()
 
     def read(self):
-        if self.src == SYNTHETIC:
+        if self.synth is not None:
             time.sleep(1 / SYNTH_FPS)
             return next(self.synth).copy()
         if self.still is not None:
