@@ -1,0 +1,283 @@
+"""Threaded camera readers that always hand out the newest frame.
+
+A source is a webcam index (0), a stream URL (http://front-cam.local:81/stream),
+a video file (looped) or "synthetic" (lgmd.py's looming square, looped). For a
+fake ESP32 over the network, run mock_glasses.py and use its URL. If the
+source dies, the reader switches to the fallback source and keeps retrying the
+primary every reconnect_s. Cameras that name the same source share one reader.
+
+    python -m backend.streams 0                 # show one source
+    python -m backend.streams --config          # show every camera in config.yaml
+"""
+
+import argparse
+import threading
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+import lgmd
+
+SYNTHETIC = "synthetic"
+SYNTH_FPS = 15
+
+
+def synthetic_frames():
+    """lgmd.synth_approach (a looming square) then 3 s of still background, upscaled
+    to 640x480 BGR. Loops forever; the rear alert fires once per loop."""
+    clip = list(lgmd.synth_approach()) + [lgmd.synth_approach()[0]] * (3 * SYNTH_FPS)
+    big = [cv2.cvtColor(cv2.resize(f, (640, 480), interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
+           for f in clip]
+    while True:
+        yield from big
+
+
+def normalize_source(src):
+    """'0' -> 0, so config and CLI can give webcam indexes as strings."""
+    if isinstance(src, str) and src.strip().isdigit():
+        return int(src)
+    return src
+
+
+def describe(src):
+    return f"webcam {src}" if isinstance(src, int) else str(src)
+
+
+class _Capture:
+    """One opened source. read() returns a BGR frame or None."""
+
+    def __init__(self, src, width, height):
+        self.src = src
+        self.cap = None
+        self.synth = synthetic_frames() if src == SYNTHETIC else None
+        self.is_file = isinstance(src, str) and src != SYNTHETIC and not src.startswith(
+            ("http://", "https://", "rtsp://")) and Path(src).exists()
+        if src == SYNTHETIC:
+            return
+        if isinstance(src, str) and src.startswith(("http://", "https://", "rtsp://")):
+            # Without timeouts a dead ESP32 can block read() for ~30 s.
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000,
+                                                              cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000])
+        else:
+            self.cap = cv2.VideoCapture(src)
+        if isinstance(src, int):
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.file_delay = 1.0 / (self.cap.get(cv2.CAP_PROP_FPS) or 30.0) if self.is_file else 0
+
+    def opened(self):
+        return self.src == SYNTHETIC or (self.cap is not None and self.cap.isOpened())
+
+    def read(self):
+        if self.src == SYNTHETIC:
+            time.sleep(1 / SYNTH_FPS)
+            return next(self.synth).copy()
+        ok, img = self.cap.read()
+        if not ok and self.is_file:      # loop video files
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, img = self.cap.read()
+        if self.is_file:
+            time.sleep(self.file_delay)  # play files at their own speed
+        return img if ok else None
+
+    def release(self):
+        if self.cap is not None:
+            self.cap.release()
+
+
+class FrameReader:
+    """Reads one camera in a background thread. latest() never blocks for long."""
+
+    def __init__(self, source, fallback=None, reconnect_s=3.0, stale_s=2.0, width=640, height=480, name=None):
+        self.source = normalize_source(source)
+        self.fallback = normalize_source(fallback)
+        self.reconnect_s = reconnect_s
+        self.stale_s = stale_s
+        self.size = (width, height)
+        self.name = name or describe(self.source)
+        self.active = None           # source currently delivering frames
+        self._cond = threading.Condition()
+        self._frame = None
+        self._seq = 0
+        self._t_frame = 0.0
+        self._fps = 0.0
+        self._alive = True
+        self._thread = threading.Thread(target=self._run, name=f"reader-{self.name}", daemon=True)
+        self._thread.start()
+
+    # -- public ------------------------------------------------------------
+
+    def latest(self):
+        """(seq, frame, timestamp). frame is None until the first frame arrives."""
+        with self._cond:
+            return self._seq, self._frame, self._t_frame
+
+    def wait_new(self, last_seq, timeout=1.0):
+        """Block until a frame newer than last_seq arrives (or timeout). Returns (seq, frame, t)."""
+        with self._cond:
+            self._cond.wait_for(lambda: self._seq != last_seq or not self._alive, timeout)
+            return self._seq, self._frame, self._t_frame
+
+    def status(self):
+        with self._cond:
+            age = time.time() - self._t_frame if self._t_frame else None
+        return {
+            "name": self.name,
+            "source": describe(self.source),
+            "active": None if self.active is None else describe(self.active),
+            "on_fallback": self.active is not None and self.active != self.source,
+            "fps": round(self._fps, 1),
+            "frame_age_s": None if age is None else round(age, 2),
+            "ok": age is not None and age < self.stale_s,
+        }
+
+    def close(self):
+        self._alive = False
+        self._thread.join(timeout=2.0)
+
+    # -- thread ------------------------------------------------------------
+
+    def _open(self, src):
+        if src is None:
+            return None
+        cap = _Capture(src, *self.size)
+        if cap.opened():
+            return cap
+        cap.release()
+        return None
+
+    def _run(self):
+        cap = None
+        next_primary_try = 0.0
+        while self._alive:
+            now = time.monotonic()
+            # (Re)open: primary first, fallback while the primary is down.
+            if cap is None or (cap.src != self.source and now >= next_primary_try):
+                if cap is None or cap.src != self.source:
+                    primary = self._open(self.source)
+                    next_primary_try = now + self.reconnect_s
+                    if primary is not None:
+                        if cap is not None:
+                            cap.release()
+                        cap = primary
+                        print(f"[streams] {self.name}: using {describe(self.source)}")
+                if cap is None:
+                    cap = self._open(self.fallback)
+                    if cap is not None:
+                        print(f"[streams] {self.name}: {describe(self.source)} down, "
+                              f"falling back to {describe(self.fallback)}")
+                if cap is None:
+                    self.active = None
+                    time.sleep(self.reconnect_s)
+                    continue
+                self.active = cap.src
+                last_ok = time.monotonic()
+
+            img = cap.read()
+            if img is None:
+                if time.monotonic() - last_ok > self.stale_s:
+                    print(f"[streams] {self.name}: {describe(cap.src)} stopped delivering frames, reconnecting")
+                    cap.release()
+                    cap = None
+                    next_primary_try = 0.0
+                else:
+                    time.sleep(0.02)
+                continue
+            last_ok = time.monotonic()
+            t = time.time()
+            with self._cond:
+                if self._t_frame:
+                    self._fps = 0.9 * self._fps + 0.1 / max(t - self._t_frame, 1e-3)
+                self._frame = img
+                self._seq += 1
+                self._t_frame = t
+                self._cond.notify_all()
+        if cap is not None:
+            cap.release()
+        with self._cond:
+            self._cond.notify_all()
+
+
+class StreamManager:
+    """One FrameReader per distinct (source, fallback), looked up by camera name."""
+
+    def __init__(self, cfg):
+        s = cfg.get("stream", {})
+        self._opts = dict(reconnect_s=s.get("reconnect_s", 3.0), stale_s=s.get("stale_s", 2.0),
+                          width=s.get("width", 640), height=s.get("height", 480))
+        self._by_source = {}
+        self.cameras = {}
+        for name, cam in cfg.get("cameras", {}).items():
+            key = (normalize_source(cam["source"]), normalize_source(cam.get("fallback")))
+            if key not in self._by_source:
+                self._by_source[key] = FrameReader(*key, name=name, **self._opts)
+            else:
+                self._by_source[key].name += f"+{name}"
+            self.cameras[name] = self._by_source[key]
+
+    def get(self, name):
+        return self.cameras[name]
+
+    def status(self):
+        return {name: r.status() for name, r in self.cameras.items()}
+
+    def close(self):
+        for r in self._by_source.values():
+            r.close()
+
+
+def blank(text, size=(640, 480)):
+    img = np.zeros((size[1], size[0], 3), np.uint8)
+    cv2.putText(img, text, (20, size[1] // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+    return img
+
+
+def main(argv=None):
+    from backend.config import load_config
+
+    ap = argparse.ArgumentParser(description="Show camera sources through the stream layer")
+    ap.add_argument("source", nargs="?", help="webcam index, URL, file or 'synthetic'")
+    ap.add_argument("--fallback", default=None)
+    ap.add_argument("--config", action="store_true", help="open every camera in config.yaml")
+    ap.add_argument("--headless", type=float, metavar="SECONDS",
+                    help="no window: print status for this many seconds")
+    args = ap.parse_args(argv)
+
+    if args.config or args.source is None:
+        mgr = StreamManager(load_config())
+        readers = mgr.cameras
+    else:
+        readers = {"cam": FrameReader(args.source, args.fallback)}
+
+    t_end = time.time() + (args.headless or 0)
+    try:
+        while True:
+            if args.headless:
+                time.sleep(1.0)
+                for name, r in readers.items():
+                    seq, frame, _ = r.latest()
+                    shape = None if frame is None else frame.shape
+                    print(f"{name}: frames {seq} shape {shape} {r.status()}")
+                if time.time() >= t_end:
+                    break
+                continue
+            for name, r in readers.items():
+                _, frame, _ = r.latest()
+                st = r.status()
+                img = blank(f"{name}: waiting for {st['source']}") if frame is None else frame.copy()
+                cv2.putText(img, f"{name} {st['active']} {st['fps']} fps", (8, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.imshow(name, img)
+            if cv2.waitKey(30) & 0xFF in (ord("q"), 27):
+                break
+    finally:
+        for r in set(readers.values()):
+            r.close()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

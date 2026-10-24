@@ -1,0 +1,11 @@
+# Python 3.11+. Pinned so every laptop at the hackathon gets the same thing.
+numpy==2.5.4
+# mediapipe pulls in opencv-contrib-python; keep both on the same version or cv2 breaks.
+opencv-python==5.0.0.93
+opencv-contrib-python==5.0.0.93
+PyYAML==6.0.3
+mediapipe==1.1.1
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+obsws-python==1.8.0
+# Optional, not installed by default: ultralytics (rear.yolo), pyttsx3 (speech off macOS)
