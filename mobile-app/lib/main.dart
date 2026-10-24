@@ -6,6 +6,7 @@ import 'alerts/voice.dart';
 import 'app.dart';
 import 'net/glasses_link.dart';
 import 'vision/detector.dart';
+import 'vision/fire_namer.dart';
 import 'vision/rear_vision.dart';
 
 void main() {
@@ -13,7 +14,7 @@ void main() {
   final link = GlassesLink();
   link.start().catchError((Object e) => debugPrint('GlassesLink could not start: $e'));
   final vision = RearVision(link, YoloDetector());
-  final alerts = AlertService(link, vision);
+  final alerts = AlertService(link, vision, namer: CamBFireNamer(link, YoloDetector()));
   alerts.start();
   runApp(
     MultiProvider(

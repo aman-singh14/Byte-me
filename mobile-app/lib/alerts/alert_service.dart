@@ -1,5 +1,9 @@
 // Feeds the alert engine from the glasses and the rear camera, sends its
 // decisions to the frame's vibration motors, and keeps the event log.
+//
+// Close range is the reflex's (Cam B, the FPGA): a fire is an urgent alert at
+// once, and [namer] then says what it is from Cam B's video. Cam A's YOLO
+// tracking warns earlier, at range.
 
 import 'dart:async';
 import 'dart:convert';
@@ -9,15 +13,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
+import '../vision/fire_namer.dart';
 import '../vision/rear_vision.dart';
 import 'alert_engine.dart';
 import 'alert_log.dart';
 import 'tracker.dart';
 
 class AlertService extends ChangeNotifier {
-  AlertService(this.link, this.vision, {AlertEngine? engine}) : engine = engine ?? AlertEngine() {
+  AlertService(this.link, this.vision, {AlertEngine? engine, this.namer}) : engine = engine ?? AlertEngine() {
     _subs.add(link.sens.listen((s) => _handle(this.engine.addSens(DateTime.now(), yawRate: s.yawRate, lux: s.lux))));
-    _subs.add(link.fires.listen((f) => _handle(this.engine.addFire(DateTime.now(), f.side))));
+    _subs.add(link.fires.listen((f) => onFire(f.side)));
     vision.addListener(_onVision);
     _onVision();
   }
@@ -25,6 +30,7 @@ class AlertService extends ChangeNotifier {
   final GlassesLink link;
   final RearVision vision;
   final AlertEngine engine;
+  final FireNamer? namer;
   final log = AlertLog();
 
   static const _logKey = 'alert_log_v1';
@@ -65,6 +71,25 @@ class AlertService extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('AlertService: could not load the event log: $e');
+    }
+  }
+
+  final _naming = <WearerSide>{};
+  bool _disposed = false;
+
+  /// A reflex fire: alert now, then name it from Cam B's video. The reflex
+  /// fires repeatedly while something looms, so each side is named once
+  /// per alert.
+  @visibleForTesting
+  Future<void> onFire(WearerSide side) async {
+    _handle(engine.addFire(DateTime.now(), side));
+    final namer = this.namer;
+    if (namer == null || engine.fireIsNamed(side) || !_naming.add(side)) return;
+    try {
+      final label = await namer.name(side);
+      if (label != null && !_disposed) _handle(engine.nameFire(DateTime.now(), side, label));
+    } finally {
+      _naming.remove(side);
     }
   }
 
@@ -132,6 +157,7 @@ class AlertService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _ticker?.cancel();
     for (final s in _subs) {
       s.cancel();

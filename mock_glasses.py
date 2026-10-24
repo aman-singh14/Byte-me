@@ -4,11 +4,13 @@
 Plays both devices:
 
     camA   MJPEG stream of the laptop webcam at http://<laptop>:81/stream (320x240)
+    camB   the FPGA reflex camera: says hello too and shares camA's stream, so
+           the app can name fires (fl / fr) from "Cam B's" video
     frame  UDP JSON: sends hello, sens (10/s) and fire; prints what the app sends
 
 Protocol (one JSON message per UDP datagram):
 
-    device -> app   {"t":"hello","id":"frame"|"camA"}       every 2 s, always
+    device -> app   {"t":"hello","id":"frame"|"camA"|"camB"}  every 2 s, always
     frame  -> app   {"t":"sens","dist":34,"blink":0,"yaw_rate":12,"lux":850,"batt":82}
     frame  -> app   {"t":"fire","side":"L","k":812}
     app -> frame    alert, tap, groupbreak, stop, hb (every 250 ms)
@@ -22,7 +24,7 @@ sides before sending.
 Type a command and press Enter while it runs:
 
     fl / fr     fire on the wearer's left / right
-    turn        head turn (yaw_rate spike for 1 s)
+    turn l / r  head turn toward the wearer's left / right (~75 deg over 1 s)
     read        close-up work, dist ~30 cm      up    looking up, dist ~250 cm
     out         daylight, lux ~20000            in    indoors, lux ~400
     drop        stop sending sens for 5 s (to test the link-lost banner)
@@ -45,7 +47,7 @@ import numpy as np
 
 APP_PORT = 4210      # the app listens here
 FRAME_PORT = 4211    # frame ESP32 sends from and listens on this port
-CAMA_PORT = 4212     # camA only sends hellos, from this port
+CAMA_PORT = 4212     # camA and camB only send hellos, from this port
 HTTP_PORT = 81       # camA MJPEG stream
 HB_TIMEOUT = 1.0     # seconds without hb before the frame decides the phone is gone
 
@@ -147,6 +149,7 @@ class FakeWearer:
         self.dist = 35.0
         self.lux = 400.0
         self.turn_until = 0.0
+        self.turn_sign = 1                              # +yaw_rate = toward the wearer's left
         self.drop_until = 0.0
         self.battery = 82
 
@@ -154,7 +157,7 @@ class FakeWearer:
         self.dist += (self.dist_target - self.dist) * 0.2 + random.gauss(0, 1.5)
         yaw = random.gauss(0, 4)
         if now < self.turn_until:
-            yaw += 120 * math.sin((self.turn_until - now) * math.pi)
+            yaw += self.turn_sign * 120 * math.sin((self.turn_until - now) * math.pi)
         blink = 1 if random.random() < 0.025 else 0     # ~15 blinks per minute at 10 Hz
         lux = self.lux * random.uniform(0.95, 1.05)
         return {"t": "sens", "dist": max(5, round(self.dist)), "blink": blink,
@@ -206,7 +209,8 @@ def read_commands(wearer, fire_queue, stop):
         now = time.time()
         if cmd in ("fl", "fr"):
             fire_queue.append({"t": "fire", "side": cmd[1].upper(), "k": random.randint(3500, 9000)})
-        elif cmd == "turn":
+        elif cmd in ("turn", "turn l", "turn r"):
+            wearer.turn_sign = -1 if cmd == "turn r" else 1
             wearer.turn_until = now + 1.0
         elif cmd == "read":
             wearer.dist_target = 30
@@ -223,7 +227,7 @@ def read_commands(wearer, fire_queue, stop):
             stop.set()
             return
         elif cmd:
-            print("commands: fl fr turn read up out in drop q")
+            print("commands: fl fr turn l|r read up out in drop q")
     # stdin closed (for example run in the background): keep running until Ctrl-C
 
 
@@ -263,7 +267,7 @@ def main(argv=None):
 
     print(f"[camA]  MJPEG on http://0.0.0.0:{args.http_port}/stream")
     print(f"[frame] UDP from port {FRAME_PORT} to {phone[0]}:{phone[1]}")
-    print("commands: fl fr turn read up out in drop q")
+    print("commands: fl fr turn l|r read up out in drop q")
 
     next_hello = next_auto_fire = time.time()
     if args.auto_fire:
@@ -274,6 +278,7 @@ def main(argv=None):
             if now >= next_hello:
                 send(frame_sock, {"t": "hello", "id": "frame"}, phone)
                 send(cam_sock, {"t": "hello", "id": "camA"}, phone)
+                send(cam_sock, {"t": "hello", "id": "camB"}, phone)
                 next_hello = now + 2.0
             if args.auto_fire and now >= next_auto_fire:
                 fire_queue.append({"t": "fire", "side": random.choice("LR"), "k": random.randint(3500, 9000)})

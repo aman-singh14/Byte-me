@@ -74,6 +74,12 @@ class _AlertAnnouncerState extends State<AlertAnnouncer> {
   late final StreamSubscription<AlertEvent> _sub = context.read<AlertService>().events.listen(_onEvent);
   late final Voice? _voice = context.read<Voice?>();
   Alert? _lastRaised;
+  Timer? _waitForName;
+
+  /// A reflex fire nobody has named yet buzzes at once, but waits this long
+  /// for Cam B's video to name it before speaking, so the wearer hears
+  /// "Car" rather than "Behind" and then "Car".
+  static const nameWait = Duration(milliseconds: 300);
 
   @override
   void initState() {
@@ -97,21 +103,44 @@ class _AlertAnnouncerState extends State<AlertAnnouncer> {
             last.level == alert.level &&
             last.label == alert.label;
         if (sideOnly) return;
-        alertHaptic(alert.level);
-        announce(context, alertSentence(alert.level, alert.label, _direction(alert)), assertive: true);
-        if (!screenReader) _voice?.say(spokenWord(alert), interrupt: true);
+
+        // Cam B just named a fire that already buzzed: say the name only.
+        final named =
+            last != null &&
+            last.source == AlertSource.reflex &&
+            alert.source == AlertSource.reflex &&
+            last.side == alert.side &&
+            last.level == alert.level &&
+            last.label == 'something';
+        if (!named) alertHaptic(alert.level);
+
+        _waitForName?.cancel();
+        void speak() {
+          if (!mounted) return;
+          announce(context, alertSentence(alert.level, alert.label, _direction(alert)), assertive: true);
+          if (!screenReader) _voice?.say(spokenWord(alert), interrupt: true);
+        }
+
+        final unnamedFire = alert.source == AlertSource.reflex && alert.label == 'something';
+        if (unnamedFire) {
+          _waitForName = Timer(nameWait, speak);
+        } else {
+          speak();
+        }
       case PossiblyFollowing():
         final sentence = FollowingCard(notice: e).sentence;
         announce(context, sentence);
         if (!screenReader) _voice?.say(sentence);
       case AlertCleared():
         _lastRaised = null; // the buzz stops; nothing to say
+        _waitForName?.cancel();
     }
   }
 
   @override
   void dispose() {
     _sub.cancel();
+    _waitForName?.cancel();
     super.dispose();
   }
 

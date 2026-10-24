@@ -37,6 +37,11 @@ class SettingsScreen extends StatelessWidget {
             subtitle: Text(link.streamUrl?.toString() ?? 'Not found'),
           ),
           ListTile(
+            leading: const Icon(Symbols.motion_sensor_active_rounded),
+            title: const Text('Reflex camera'),
+            subtitle: Text(link.camBStreamUrl?.toString() ?? 'Not found'),
+          ),
+          ListTile(
             leading: const Icon(Symbols.wifi_tethering_rounded),
             title: const Text('How pairing works'),
             subtitle: Text(

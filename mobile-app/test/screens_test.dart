@@ -14,6 +14,7 @@ import 'package:omni_glasses/net/glasses_link.dart';
 import 'package:omni_glasses/net/protocol.dart';
 import 'package:omni_glasses/screens/home_shell.dart';
 import 'package:omni_glasses/vision/detector.dart';
+import 'package:omni_glasses/vision/fire_namer.dart';
 import 'package:omni_glasses/vision/rear_vision.dart';
 import 'package:provider/provider.dart';
 
@@ -24,6 +25,7 @@ Future<AlertService> pumpApp(
   double textScale = 1,
   AlertEngine? engine,
   Voice? voice,
+  FireNamer? namer,
 }) async {
   tester.view.physicalSize = const Size(360 * 3, 740 * 3); // small Android phone
   tester.view.devicePixelRatio = 3;
@@ -34,7 +36,7 @@ Future<AlertService> pumpApp(
 
   final link = GlassesLink(port: 0); // not started: stays "searching", no camera
   final vision = RearVision(link, _NoDetector());
-  final alerts = AlertService(link, vision, engine: engine);
+  final alerts = AlertService(link, vision, engine: engine, namer: namer);
   addTearDown(alerts.dispose);
   addTearDown(vision.dispose);
   addTearDown(link.dispose);
