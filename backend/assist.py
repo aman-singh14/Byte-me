@@ -36,7 +36,7 @@ def region_from_question(question):
 
 
 class Assistant:
-    def __init__(self, front_reader, detector, muse, gaze, voice, emit, focal_px=None, db=None):
+    def __init__(self, front_reader, detector, muse, gaze, voice, emit, focal_px=None, db=None, still_fn=None):
         self.front = front_reader
         self.detector = detector
         self.muse = muse
@@ -45,6 +45,7 @@ class Assistant:
         self.emit = emit
         self.focal_px = focal_px          # callable(width) -> FRONT focal length in px
         self.db = db
+        self.still_fn = still_fn          # callable -> a higher-res FRONT still (or None)
         self.last = None
 
     def pick_region(self, question=None, region_override=None):
@@ -72,6 +73,11 @@ class Assistant:
 
         status = self.front.status() if self.front is not None else {"ok": False}
         _, frame, _ = self.front.latest() if self.front is not None else (0, None, 0)
+        if frame is not None and status.get("ok") and self.still_fn is not None:
+            still = self.still_fn()       # one 640x480/800x600 /capture, only now, for detail
+            if still is not None:
+                frame = still
+                result["still"] = True
         if frame is None or not status.get("ok"):
             text = "The front camera is offline, so I can't see right now."
             result["local_answer"] = text
@@ -81,7 +87,8 @@ class Assistant:
 
         crop, x0 = self.gaze.crop(frame, region) if self.gaze is not None else (frame, 0)
         focal = self.focal_px(frame.shape[1]) if self.focal_px else None
-        dets = self.detector.detect(crop, x_offset=x0, full_width=frame.shape[1], focal_px=focal)
+        mirrored = bool(getattr(self.gaze, "front_mirrored", False))
+        dets = self.detector.detect(crop, x_offset=x0, full_width=frame.shape[1], focal_px=focal, mirrored=mirrored)
         local = quick_answer(dets, region)
         result["detections"] = [d.as_dict() for d in dets]
         result["local_answer"] = local

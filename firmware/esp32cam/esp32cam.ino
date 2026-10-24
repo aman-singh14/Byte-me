@@ -1,26 +1,43 @@
-// Camera firmware for the AI-Thinker ESP32-CAM (OV2640).
+// Camera firmware for the AI-Thinker ESP32-CAM (OV2640): EYE or FRONT camera.
+// It only streams; all processing happens in the backend on the laptop.
 //
-// Trimmed-down CameraWebServer: MJPEG on http://<name>.local:81/stream, a single
-// JPEG on http://<name>.local/capture, and JSON on /status. The backend reads the
-// stream with OpenCV; set its URL in backend/config.yaml.
+//   http://<ip>:81/stream               MJPEG, 320x240 (EYE up to 25 fps, FRONT capped at 5 fps)
+//   http://<ip>/capture?size=vga|svga   one JPEG at 640x480 / 800x600, on demand (then back to 320x240)
+//   http://<ip>/sensor                  live auto-exposure (AEC) and gain (AGC), for outdoor detection
+//   http://<ip>/status                  role, IP, RSSI, uptime, frames sent
+//   UDP hello to port 4310 every 2 s    {"t":"cam_hello","role":"eye","ip":"172.20.10.3",...}
 //
-// Before flashing:
-//   1. cp secrets.example.h secrets.h   and fill in the hotspot name and password
-//   2. set DEVICE_NAME below: "front", "eye" or "rear"
-// Board: "AI Thinker ESP32-CAM" (esp32 core 2.x or 3.x). See README.md for wiring.
+// Wi-Fi: station mode only (no access point). It joins the phone hotspot in secrets.h,
+// reconnects if the hotspot drops and prints its IP over serial at boot.
+//
+// Before flashing: cp secrets.example.h secrets.h (hotspot name/password), set DEVICE_ROLE.
+// Board: "AI Thinker ESP32-CAM" (esp32 core 2.x or 3.x).
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <ESPmDNS.h>
 #include "esp_camera.h"
 #include "esp_http_server.h"
-#include "secrets.h"   // WIFI_SSID, WIFI_PASSWORD (gitignored)
+#include "secrets.h"   // WIFI_SSID, WIFI_PASSWORD, optional BACKEND_HOST (gitignored)
 
 // ---- per-device settings ----------------------------------------------------
-#define DEVICE_NAME "front"            // front | eye | rear  -> mDNS front-cam.local, etc.
-#define FRAME_SIZE  FRAMESIZE_VGA      // 640x480. QVGA (320x240) if Wi-Fi is weak; the rear LGMD only needs 80x60
-#define JPEG_QUALITY 14                // 10 (best) .. 63 (smallest)
+#define ROLE_EYE 1
+#define ROLE_FRONT 2
+#define DEVICE_ROLE ROLE_EYE           // ROLE_EYE or ROLE_FRONT
+
+#if DEVICE_ROLE == ROLE_EYE
+#define DEVICE_NAME "eye"              // mDNS eye-cam.local
+#define STREAM_MAX_FPS 25              // blinks need frame rate more than detail
+#else
+#define DEVICE_NAME "front"            // mDNS front-cam.local
+#define STREAM_MAX_FPS 5               // the backend analyses 2-5 fps; keep hotspot bandwidth low
+#endif
+#define STREAM_SIZE FRAMESIZE_QVGA     // 320x240
+#define JPEG_QUALITY 12                // 10 (best) .. 63 (smallest)
 #define FLIP_VERTICAL 0                // set to 1 if the image is upside down in the mount
 #define MIRROR 0
+#define HELLO_PORT 4310
+#define HELLO_EVERY_MS 2000
 
 // ---- AI-Thinker pin map ---------------------------------------------------------
 #define PWDN_GPIO_NUM 32
@@ -51,6 +68,11 @@ static httpd_handle_t control_httpd = NULL;
 static httpd_handle_t stream_httpd = NULL;
 static volatile uint32_t frames_sent = 0;
 static volatile uint8_t stream_clients = 0;
+static SemaphoreHandle_t cam_lock;      // /capture changes the frame size; the stream must wait
+static WiFiUDP udp;
+
+// OV2640 sensor-bank registers (bank 1): get_reg() takes (bank << 8) | address.
+#define SENSOR_REG(a) (0x100 | (a))
 
 static esp_err_t stream_handler(httpd_req_t *req) {
   char part[64];
@@ -58,8 +80,17 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   if (res != ESP_OK) return res;
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   stream_clients++;
+  const uint32_t min_ms = 1000 / STREAM_MAX_FPS;
+  uint32_t last = 0;
   while (true) {
+    uint32_t now = millis();
+    if (now - last < min_ms) {
+      delay(min_ms - (now - last));
+    }
+    last = millis();
+    xSemaphoreTake(cam_lock, portMAX_DELAY);
     camera_fb_t *fb = esp_camera_fb_get();
+    xSemaphoreGive(cam_lock);
     if (!fb) {
       Serial.println("camera capture failed");
       res = ESP_FAIL;
@@ -77,9 +108,25 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   return res;
 }
 
+// /capture?size=qvga|vga|svga: switch the sensor up, drop the stale frames, grab one, switch back.
 static esp_err_t capture_handler(httpd_req_t *req) {
-  camera_fb_t *fb = esp_camera_fb_get();
+  char query[32] = {0}, size[8] = "vga";
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+    httpd_query_key_value(query, "size", size, sizeof(size));
+  }
+  framesize_t fs = strcmp(size, "svga") == 0 ? FRAMESIZE_SVGA : strcmp(size, "qvga") == 0 ? FRAMESIZE_QVGA
+                                                                                           : FRAMESIZE_VGA;
+  sensor_t *s = esp_camera_sensor_get();
+  xSemaphoreTake(cam_lock, portMAX_DELAY);
+  if (fs != STREAM_SIZE) s->set_framesize(s, fs);
+  camera_fb_t *fb = NULL;
+  for (int i = 0; i < 3; i++) {          // the first frames after a size change are still old/garbled
+    if (fb) esp_camera_fb_return(fb);
+    fb = esp_camera_fb_get();
+  }
   if (!fb) {
+    if (fs != STREAM_SIZE) s->set_framesize(s, STREAM_SIZE);
+    xSemaphoreGive(cam_lock);
     httpd_resp_send_500(req);
     return ESP_FAIL;
   }
@@ -87,16 +134,49 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   esp_err_t res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
   esp_camera_fb_return(fb);
+  if (fs != STREAM_SIZE) {
+    s->set_framesize(s, STREAM_SIZE);
+    camera_fb_t *stale = esp_camera_fb_get();   // flush one frame at the old size
+    if (stale) esp_camera_fb_return(stale);
+  }
+  xSemaphoreGive(cam_lock);
   return res;
+}
+
+// Live auto-exposure and gain. The OV2640 keeps the picture's brightness constant, so the
+// backend divides mean brightness by exposure x gain to tell a sunny street from an office.
+//   AEC[15:0] = REG45[5:0] << 10 | REG10 << 2 | REG04[1:0]   (exposure, in lines)
+//   GAIN = REG00: (b7+1)(b6+1)(b5+1)(b4+1)(1 + b[3:0]/16)
+static esp_err_t sensor_handler(httpd_req_t *req) {
+  sensor_t *s = esp_camera_sensor_get();
+  xSemaphoreTake(cam_lock, portMAX_DELAY);
+  int r04 = s->get_reg(s, SENSOR_REG(0x04), 0xFF);
+  int r10 = s->get_reg(s, SENSOR_REG(0x10), 0xFF);
+  int r45 = s->get_reg(s, SENSOR_REG(0x45), 0xFF);
+  int gain = s->get_reg(s, SENSOR_REG(0x00), 0xFF);
+  xSemaphoreGive(cam_lock);
+  char json[200];
+  if (r04 < 0 || r10 < 0 || r45 < 0 || gain < 0) {
+    snprintf(json, sizeof(json), "{\"role\":\"%s\",\"error\":\"register read failed\"}", DEVICE_NAME);
+  } else {
+    unsigned aec = ((r45 & 0x3F) << 10) | (r10 << 2) | (r04 & 0x03);
+    snprintf(json, sizeof(json),
+             "{\"role\":\"%s\",\"aec_lines\":%u,\"gain_reg\":%d,\"aec_enabled\":%d,\"agc_enabled\":%d,"
+             "\"uptime_ms\":%lu}",
+             DEVICE_NAME, aec, gain, s->status.aec, s->status.agc, (unsigned long)millis());
+  }
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  return httpd_resp_send(req, json, strlen(json));
 }
 
 static esp_err_t status_handler(httpd_req_t *req) {
   char json[256];
   snprintf(json, sizeof(json),
-           "{\"name\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"frames_sent\":%lu,"
-           "\"stream_clients\":%u,\"free_heap\":%u}",
+           "{\"role\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"frames_sent\":%lu,"
+           "\"stream_clients\":%u,\"max_fps\":%d,\"free_heap\":%u}",
            DEVICE_NAME, WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000,
-           (unsigned long)frames_sent, stream_clients, ESP.getFreeHeap());
+           (unsigned long)frames_sent, stream_clients, STREAM_MAX_FPS, ESP.getFreeHeap());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, json, strlen(json));
@@ -106,12 +186,14 @@ static void start_servers() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   httpd_uri_t capture_uri = {.uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL};
+  httpd_uri_t sensor_uri = {.uri = "/sensor", .method = HTTP_GET, .handler = sensor_handler, .user_ctx = NULL};
   httpd_uri_t status_uri = {.uri = "/status", .method = HTTP_GET, .handler = status_handler, .user_ctx = NULL};
   if (httpd_start(&control_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(control_httpd, &capture_uri);
+    httpd_register_uri_handler(control_httpd, &sensor_uri);
     httpd_register_uri_handler(control_httpd, &status_uri);
   }
-  // The stream gets its own server (port 81) so a long-lived stream never blocks /status.
+  // The stream gets its own server (port 81) so a long-lived stream never blocks the others.
   config.server_port = 81;
   config.ctrl_port += 1;
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
@@ -142,7 +224,8 @@ static bool init_camera() {
   c.pin_reset = RESET_GPIO_NUM;
   c.xclk_freq_hz = 20000000;
   c.pixel_format = PIXFORMAT_JPEG;
-  c.frame_size = FRAME_SIZE;
+  // Allocate for the largest still we serve (SVGA); the sensor then runs at the stream size.
+  c.frame_size = FRAMESIZE_SVGA;
   c.jpeg_quality = JPEG_QUALITY;
   c.grab_mode = CAMERA_GRAB_LATEST;   // always the newest frame: lower latency, drops old ones
   if (psramFound()) {
@@ -159,29 +242,59 @@ static bool init_camera() {
     return false;
   }
   sensor_t *s = esp_camera_sensor_get();
+  s->set_framesize(s, STREAM_SIZE);
   s->set_vflip(s, FLIP_VERTICAL);
   s->set_hmirror(s, MIRROR);
+  s->set_exposure_ctrl(s, 1);   // auto exposure on: /sensor reports what it chose
+  s->set_gain_ctrl(s, 1);
   return true;
 }
 
-static void connect_wifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);   // modem sleep adds a lot of stream latency
-  WiFi.setHostname(DEVICE_NAME "-cam");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("connecting to %s", WIFI_SSID);
+static void wait_for_wifi(uint32_t timeout_ms) {
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeout_ms) {
     digitalWrite(LED_GPIO_NUM, !digitalRead(LED_GPIO_NUM));   // blink while connecting
     delay(250);
     Serial.print(".");
-    if (millis() - t0 > 30000) {
-      Serial.println("\nno Wi-Fi after 30 s (2.4 GHz only; iPhone: Maximize Compatibility), restarting");
-      ESP.restart();
-    }
+  }
+}
+
+static void connect_wifi() {
+  WiFi.softAPdisconnect(true);  // never an access point: we join the phone hotspot
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);         // modem sleep adds a lot of stream latency
+  WiFi.setHostname(DEVICE_NAME "-cam");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("connecting to %s", WIFI_SSID);
+  wait_for_wifi(30000);
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nno Wi-Fi after 30 s (2.4 GHz only; iPhone: Maximize Compatibility), restarting");
+    ESP.restart();
   }
   digitalWrite(LED_GPIO_NUM, LOW);   // solid on = connected
   Serial.printf("\nconnected, IP %s, RSSI %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+}
+
+// Tell the backend where we are: broadcast on the hotspot, and unicast to BACKEND_HOST if set.
+static void send_hello() {
+  char msg[160];
+  int n = snprintf(msg, sizeof(msg),
+                   "{\"t\":\"cam_hello\",\"role\":\"%s\",\"ip\":\"%s\",\"stream_port\":81,\"http_port\":80,"
+                   "\"max_fps\":%d}",
+                   DEVICE_NAME, WiFi.localIP().toString().c_str(), STREAM_MAX_FPS);
+  udp.beginPacket(IPAddress(255, 255, 255, 255), HELLO_PORT);
+  udp.write((const uint8_t *)msg, n);
+  udp.endPacket();
+#ifdef BACKEND_HOST
+  IPAddress backend;
+  if (WiFi.hostByName(BACKEND_HOST, backend)) {
+    udp.beginPacket(backend, HELLO_PORT);
+    udp.write((const uint8_t *)msg, n);
+    udp.endPacket();
+  }
+#endif
 }
 
 void setup() {
@@ -190,6 +303,7 @@ void setup() {
   pinMode(FLASH_GPIO_NUM, OUTPUT);
   digitalWrite(FLASH_GPIO_NUM, LOW);
   Serial.printf("\ncamera '%s'\n", DEVICE_NAME);
+  cam_lock = xSemaphoreCreateMutex();
   if (!init_camera()) {
     delay(3000);
     ESP.restart();
@@ -200,19 +314,26 @@ void setup() {
     Serial.printf("mDNS: http://%s-cam.local:81/stream\n", DEVICE_NAME);
   }
   start_servers();
+  udp.begin(HELLO_PORT);
   Serial.printf("stream:  http://%s:81/stream\n", WiFi.localIP().toString().c_str());
 }
 
 void loop() {
-  // Reconnect if the hotspot drops (phone locked, walked away).
+  static uint32_t last_hello = 0;
   if (WiFi.status() != WL_CONNECTED) {
+    // The hotspot dropped (phone locked, walked away): auto-reconnect is on, but give it a push.
     Serial.println("Wi-Fi lost, reconnecting");
     digitalWrite(LED_GPIO_NUM, HIGH);
     WiFi.reconnect();
-    uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(250);
+    wait_for_wifi(20000);
     if (WiFi.status() != WL_CONNECTED) ESP.restart();
     digitalWrite(LED_GPIO_NUM, LOW);
+    Serial.printf("\nreconnected, IP %s\n", WiFi.localIP().toString().c_str());
+    last_hello = 0;               // announce the (possibly new) IP right away
   }
-  delay(1000);
+  if (millis() - last_hello >= HELLO_EVERY_MS) {
+    last_hello = millis();
+    send_hello();
+  }
+  delay(50);
 }

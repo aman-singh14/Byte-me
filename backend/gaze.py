@@ -35,6 +35,9 @@ class GazeTracker:
         self.settle_s = g.get("settle_s", 0.5)
         self.window_s = g.get("smoothing_s", 0.5)
         self.hysteresis = g.get("hysteresis", 0.15)     # fraction of the left-right span
+        # Dev: a webcam facing the wearer shows a mirror image of their view, so "look left"
+        # must pick the right side of its picture. The real FRONT camera faces forward: False.
+        self.front_mirrored = bool(g.get("front_mirrored", False))
         self.regions = {k: tuple(v) for k, v in g.get("regions", {
             "left": (0.0, 0.41), "center": (0.26, 0.74), "right": (0.59, 1.0)}).items()}
         saved = load_calibration().get("gaze", {}).get(user)
@@ -155,6 +158,8 @@ class GazeTracker:
         """Pixel columns [x0, x1) of a region in a frame `width` wide."""
         if region in (None, "all"):
             return 0, width
+        if self.front_mirrored and region in ("left", "right"):
+            region = "right" if region == "left" else "left"
         a, b = self.regions[region]
         return int(round(a * width)), int(round(b * width))
 

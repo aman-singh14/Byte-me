@@ -200,3 +200,28 @@ class VoiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneEyeAndMirroring(TempCalibration):
+    def test_mirrored_front_swaps_sides(self):
+        cfg = load_config()
+        cfg["gaze"]["front_mirrored"] = True
+        g = GazeTracker(cfg)
+        plain = GazeTracker(load_config())
+        self.assertEqual(g.region_bounds("left", 640), plain.region_bounds("right", 640))
+        self.assertEqual(g.region_bounds("center", 640), plain.region_bounds("center", 640))
+        self.assertEqual(g.region_bounds("all", 640), (0, 640))
+
+    def test_facemesh_left_eye_only(self):
+        import cv2
+        from backend.eye_tracking import LEFT_IRIS, FaceMeshEyes
+        img = cv2.imread(str(Path(__file__).resolve().parent / "data" / "face.jpg"))
+        if img is None:
+            self.skipTest("no sample face image")
+        left = FaceMeshEyes(eye="left")
+        f = left.extract(img)
+        self.assertEqual(len(f.points), 7)                       # 6 lid/corner points + 1 iris
+        iris = left.last_landmarks[LEFT_IRIS]
+        self.assertTrue((f.points[-1] == iris).all())
+        self.assertGreater(iris[0], img.shape[1] / 2)            # wearer's left eye = image right side
+        self.assertEqual(len(FaceMeshEyes(face_mesh=left.mesh, eye="both").extract(img).points), 14)

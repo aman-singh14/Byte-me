@@ -20,6 +20,7 @@ import '../social/together_time.dart';
 import '../theme/theme.dart';
 import 'home_shell.dart';
 import 'profile_sheets.dart';
+import 'rings_widgets.dart';
 
 class TogetherScreen extends StatelessWidget {
   const TogetherScreen({super.key});
@@ -35,6 +36,8 @@ class TogetherScreen extends StatelessWidget {
             "Can't reach the Together server. Showing what was last loaded.",
             style: context.type.body.copyWith(color: context.colors.textSecondary),
           ),
+        // Rings detail (from the laptop backend) first, then friends and groups.
+        const RingsHistoryCard(key: ValueKey('rings week')),
         if (!social.signedIn)
           const _JoinCard()
         else ...[

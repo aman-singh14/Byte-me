@@ -143,7 +143,7 @@ class FakeDetector:
     def __init__(self, dets=None):
         self.dets, self.calls = dets or [], []
 
-    def detect(self, frame, x_offset=0, full_width=None, focal_px=None):
+    def detect(self, frame, x_offset=0, full_width=None, focal_px=None, mirrored=False):
         self.calls.append((frame.shape, x_offset, full_width))
         return self.dets
 
@@ -256,6 +256,12 @@ class LocalVision(unittest.TestCase):
         crop = self.img[:, : int(w * 0.41)]
         ds = self.det.detect(crop, x_offset=0, full_width=w)
         self.assertTrue(any(d.label == "person" and d.position == "left" for d in ds))
+
+    def test_mirrored_positions(self):
+        w = self.img.shape[1]
+        crop = self.img[:, : int(w * 0.41)]
+        ds = self.det.detect(crop, x_offset=0, full_width=w, mirrored=True)
+        self.assertTrue(any(d.label == "person" and d.position == "right" for d in ds))
 
     def test_quick_answer_wording(self):
         d = [Detection("bus", .9, (0, 0, 1, 1), "ahead", .4, 361), Detection("person", .9, (0, 0, 1, 1), "left", .1, 213),

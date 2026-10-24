@@ -9,3 +9,4 @@ firmware/esp32cam/secrets.h
 .env
 helper-web/node_modules/
 helper-web/coverage/
+backend/tests/data/

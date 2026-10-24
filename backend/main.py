@@ -23,7 +23,11 @@ import lgmd
 from backend.config import load_config
 from backend.db import DB
 from backend.distance import DistanceEstimator
-from backend.eye_tracking import EyeTracker, FaceMeshEyes
+from backend.discovery import CameraDirectory
+from backend.eye_tracking import EyeTracker, FaceMeshEyes, LowBlinkMonitor
+from backend.front import FrontAnalyzer
+from backend.outdoor import SensorPoller
+from backend.rings import Rings
 from backend.gaze import GazeTracker
 from backend.rear_alert import RearAlert
 from backend.speech import Voice
@@ -31,10 +35,11 @@ from backend.assist import Assistant
 from backend.muse_client import MuseClient
 from backend.vision import Detector
 from backend.rear.service import RearService
-from backend.streams import StreamManager, blank
+from backend.streams import SYNTHETIC_FRONT, StreamManager, blank
 
 STORED_EVENTS = {"blink", "squint_start", "squint_end", "too_close_start", "too_close_end",
-                 "alert", "calibrated", "break", "facetime", "gaze_calibrated"}   # "assist" is stored by Assistant
+                 "alert", "calibrated", "break", "facetime", "gaze_calibrated", "partial_blink",
+                 "low_blink_start", "low_blink_end"}   # "assist" is stored by Assistant
 QUIET_EVENTS = {"blink", "speak"}      # not printed (speak is printed by the voice itself)
 
 
@@ -69,7 +74,9 @@ class Runtime:
         self.cfg = cfg
         self.db = DB(cfg["db"]["path"])
         self.streams = StreamManager(cfg)
-        self.fps = cfg.get("pipelines", {}).get("fps", 15)
+        default_fps = cfg.get("pipelines", {}).get("fps", 15)
+        cams = cfg.get("cameras", {})
+        self.cam_fps = {c: cams.get(c, {}).get("fps", default_fps) for c in ("eye", "front", "rear")}
         self._lock = threading.Lock()
         self._live = {"started": time.time(), "mode": "dev" if cfg.get("dev") else "product"}
         self.recent = collections.deque(maxlen=200)    # (id, event dict) for the WebSocket
@@ -87,18 +94,35 @@ class Runtime:
         self.shared_face = (eye_reader is front_reader and isinstance(self.eye.extractor, FaceMeshEyes)
                             and cfg["distance"].get("method", "face") == "face")
         self.distance = DistanceEstimator(cfg, face_mesh=self.eye.extractor.mesh if self.shared_face else None)
+        # Product: distance comes from near-work objects (FrontAnalyzer). Dev face-width distance stays available.
+        self.use_distance = cfg["distance"].get("method") in ("face", "object")
         self.rear_mode = cfg.get("rear", {}).get("mode", "fpga")
         # rear.mode: software runs lgmd.py on a rear stream; fpga mode gets events instead (backend/rear).
         v = cfg.get("vision", {})
         self.detector = Detector(v.get("model", "yolov8n.pt"), v.get("min_conf", 0.35))
         self.muse = MuseClient(cfg, self.db)
         self.assistant = Assistant(self.streams.cameras.get("front"), self.detector, self.muse, self.gaze,
-                                   self.voice, self.emit, focal_px=self.distance._focal, db=self.db)
+                                   self.voice, self.emit, focal_px=self.distance._focal, db=self.db,
+                                   still_fn=lambda: self.front_still())
         self.rear = (RearAlert(cfg, speaker=self.voice)
                      if self.rear_mode == "software" and "rear" in cfg.get("cameras", {}) else None)
         self.rear_service = (RearService(cfg, self.voice, self.emit, self.detector, self.muse, self.db)
                              if self.rear_mode == "fpga" else None)
         self.camera_state = {}                         # camera name -> "online" | "offline"
+
+        self.rings = Rings(cfg, self.db)
+        lb = cfg.get("eye", {})
+        self.low_blink = LowBlinkMonitor(lb.get("low_blink_per_min", 10), lb.get("low_blink_min_s", 300))
+        self.directory = CameraDirectory(cfg, on_change=self._camera_moved)
+        front_src = cams.get("front", {}).get("source")
+        if front_src == SYNTHETIC_FRONT:              # dev: scripted scenes + fake detections and exposure
+            from backend.synth_front import ScriptedDetector, shared
+            front_detector, sensor_fn, self.sensor_poller = ScriptedDetector(shared()), shared().sensor, None
+        else:
+            self.sensor_poller = SensorPoller(lambda: self.directory.http_base("front"))
+            front_detector, sensor_fn = self.detector, self.sensor_poller.get
+        self.front = FrontAnalyzer(cfg, self.db, front_detector, self.rings, self.emit,
+                                   worn_fn=lambda: bool(self._live.get("eye_detected")), sensor_fn=sensor_fn)
 
     # -- state shared with the API --------------------------------------------
 
@@ -109,6 +133,27 @@ class Runtime:
         d["session_min"] = round(self.session.minutes(now), 1)
         d["ts"] = now
         return d
+
+    def front_still(self):
+        """One higher-resolution FRONT still from the ESP32 (/capture?size=vga|svga), on demand
+        only (for Muse). None if the camera can't be reached (callers fall back to the stream)."""
+        import urllib.request
+        base = self.directory.http_base("front")
+        if not base:
+            return None
+        size = self.cfg["cameras"].get("front", {}).get("still_size", "vga")
+        try:
+            with urllib.request.urlopen(f"{base}/capture?size={size}", timeout=3) as r:
+                buf = np.frombuffer(r.read(), np.uint8)
+            return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        except (OSError, ValueError):
+            return None
+
+    def _camera_moved(self, role, url):
+        """A camera announced a (new) IP: point its stream reader there."""
+        reader = self.streams.cameras.get(role)
+        if reader is not None and url:
+            reader.set_source(url)
 
     def _update_live(self, **kw):
         with self._lock:
@@ -144,9 +189,17 @@ class Runtime:
                 data = {"baseline": round(val, 4)}
             elif val is None:            # squint_start
                 data = None
-            else:                        # blink, squint_end
+            else:                        # blink, partial_blink, squint_end
                 data = {"duration_s": round(val, 3)}
             self.emit(kind, data, t)
+        lb = self.low_blink.update(t, state.get("blink_rate"), state["eye_detected"])
+        if lb and lb[0] == "low_blink_start":
+            self.emit("low_blink_start", {"since": lb[1]}, t)
+        elif lb:
+            self.db.add_interval("low_blink", lb[1]["start"], lb[1]["end"])
+            self.emit("low_blink_end", lb[1], t)
+        self._update_live(low_blink=self.low_blink.active, low_blink_since=self.low_blink.since
+                          if self.low_blink.active else None)
         pupil = state.get("pupil")
         self._update_live(**self.gaze.update(tuple(pupil) if pupil else None, t))
         brk = self.session.update(state["eye_detected"], t)
@@ -154,12 +207,19 @@ class Runtime:
             self.emit("break", {"duration_s": brk[1]}, t)
 
     def _front_step(self, frame, t):
-        lm = self.eye.extractor.last_landmarks if self.shared_face else None
-        state, events = self.distance.process(frame, t, landmarks=lm)
         lux = float(np.mean(frame)) * 4   # very rough: the app wants a lux number
-        self._update_live(**state, lux_est=round(lux))
-        for kind, val in events:
-            self.emit(kind, {"distance_cm": val} if kind == "too_close_start" else {"duration_s": val}, t)
+        if self.use_distance:              # dev: face-width distance
+            lm = self.eye.extractor.last_landmarks if self.shared_face else None
+            state, events = self.distance.process(frame, t, landmarks=lm)
+            self._update_live(**state)
+            for kind, val in events:
+                self.emit(kind, {"distance_cm": val} if kind == "too_close_start" else {"duration_s": val}, t)
+        fs = self.front.process(frame, t)
+        self._update_live(**fs, lux_est=round(lux))
+        if not self.use_distance:          # product: distance = nearest near-work object
+            self._update_live(distance_cm=fs["nearwork_distance_cm"], too_close=fs["nearwork_close"],
+                              threshold_cm=fs["nearwork_threshold_cm"], device=fs["nearwork_object"],
+                              distance_method="nearwork")
 
     def _rear_step(self, frame, t):
         state, events = self.rear.process(frame, t)
@@ -179,15 +239,24 @@ class Runtime:
             if "eye" in changed:
                 self._update_live(eye_detected=False, openness=None, openness_ratio=None, pupil=None)
             if "front" in changed:
-                self._update_live(distance_cm=None, too_close=False, too_close_for_s=0)
+                self.front.flush()
+                self._update_live(distance_cm=None, too_close=False, too_close_for_s=0, nearwork=False,
+                                  nearwork_object=None, nearwork_distance_cm=None, closeup_session=None, heads_up=None)
         self._update_live(cameras=dict(self.camera_state))
         for c in changed:
             self.emit(f"camera_{state}", {"camera": c, "source": source})
 
+    def _front_annotators(self):
+        """Preview overlays for the FRONT camera: object boxes + distances (and, in dev, the
+        face-width line)."""
+        return ([self.distance.annotate] if self.use_distance else []) + [self.front.annotate]
+
     def _loop(self, name, reader, steps, annotators):
+        """steps: [(fn, fps)]. Each step runs at most at its own rate (eye ~25 fps, front ~3)."""
         cams = name.split("+")
         label = " + ".join(c.upper() for c in cams)
-        seq, min_dt, last = 0, 1.0 / self.fps, 0.0
+        seq = 0
+        last = [0.0] * len(steps)
         while not self._stop.is_set():
             seq, frame, t = reader.wait_new(seq, timeout=0.5)
             st = reader.status()
@@ -196,12 +265,13 @@ class Runtime:
                 self.frames[name] = blank(f"{label} camera offline - retrying {st['source']}")
                 continue
             self._set_camera_state(cams, "online", st["active"])
-            if t - last < min_dt:
+            due = [i for i, (_, fps) in enumerate(steps) if t - last[i] >= 1.0 / fps]
+            if not due:
                 continue
-            last = t
             try:
-                for step in steps:
-                    step(frame, t)
+                for i in due:
+                    last[i] = t
+                    steps[i][0](frame, t)
                 img = frame.copy()
                 for a in annotators:
                     a(img)
@@ -221,14 +291,15 @@ class Runtime:
     def start(self):
         s = self.streams
         loops = []
-        if self.shared_face:
-            loops.append(("eye+front", s.get("eye"), [self._eye_step, self._front_step],
-                          [self.eye.annotate, self.distance.annotate]))
+        f = self.cam_fps
+        if s.get("eye") is s.get("front"):             # dev: one webcam feeds both
+            loops.append(("eye+front", s.get("eye"), [(self._eye_step, f["eye"]), (self._front_step, f["front"])],
+                          [self.eye.annotate, *self._front_annotators()]))
         else:
-            loops.append(("eye", s.get("eye"), [self._eye_step], [self.eye.annotate]))
-            loops.append(("front", s.get("front"), [self._front_step], [self.distance.annotate]))
+            loops.append(("eye", s.get("eye"), [(self._eye_step, f["eye"])], [self.eye.annotate]))
+            loops.append(("front", s.get("front"), [(self._front_step, f["front"])], self._front_annotators()))
         if self.rear is not None:
-            loops.append(("rear", s.get("rear"), [self._rear_step], [self.rear.annotate]))
+            loops.append(("rear", s.get("rear"), [(self._rear_step, f["rear"])], [self.rear.annotate]))
         elif self.rear_service is not None:
             print("[rear] fpga mode: rear warnings come from FPGA events (docs/rear_event_protocol.md)")
             self.rear_service.start()
@@ -236,6 +307,9 @@ class Runtime:
             threading.Thread(target=self._loop, args=(name, reader, steps, ann), name=name, daemon=True).start()
         self.pipeline_names = [n for n, *_ in loops]
         threading.Thread(target=self._sampler, name="sampler", daemon=True).start()
+        self.directory.start()
+        if self.sensor_poller is not None:
+            self.sensor_poller.start()
         threading.Thread(target=self.detector._load, name="yolo-load", daemon=True).start()   # warm up
         m = self.muse.usage()
         print(f"[muse] {m['model']}: {'key found' if m['has_key'] else 'NO KEY (local answers only)'}, "
@@ -263,6 +337,10 @@ class Runtime:
 
     def stop(self):
         self._stop.set()
+        self.front.flush()
+        self.directory.stop()
+        if self.sensor_poller is not None:
+            self.sensor_poller.stop()
         if self.rear_service is not None:
             self.rear_service.stop()
         if self.bridge:
@@ -332,7 +410,7 @@ def main(argv=None):
         fp["serial_port"] = args.rear_serial
     if args.eye_method == "closeup":
         # Product eye settings, even on top of the dev overlay.
-        cfg["eye"].update(method="closeup", default_baseline=1.0, blink_min_frames=2, blink_max_frames=7)
+        cfg["eye"].update(method="closeup", default_baseline=1.0)
     elif args.eye_method:
         cfg["eye"]["method"] = args.eye_method
     print(f"[mode] {'DEV (stand-in cameras, not the product)' if args.dev else 'product'}: "
