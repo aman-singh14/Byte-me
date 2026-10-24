@@ -13,7 +13,8 @@ Protocol (one JSON message per UDP datagram):
     device -> app   {"t":"hello","id":"frame"|"camA"|"camB"}  every 2 s, always
     frame  -> app   {"t":"sens","dist":34,"blink":0,"yaw_rate":12,"lux":850,"batt":82}
     frame  -> app   {"t":"fire","side":"L","k":812}
-    app -> frame    alert, tap, groupbreak, stop, hb (every 250 ms)
+    app -> frame    alert, tap, groupbreak, stop, hb (every 250 ms),
+                    guide {"dir":"L"|"R"|"fwd"|"stop"} (Call a helper; printed with its buzz)
 
 The app listens on UDP port 4210 and learns each device's address from the
 sender of its hello, so it replies to whatever address and port the hello came
@@ -191,7 +192,20 @@ def receive_loop(sock, state):
                 print(f"[frame] hb x{hb_count} in the last {time.time() - hb_window:.0f} s")
                 hb_count, hb_window = 0, time.time()
             continue
+        if msg.get("t") == "guide":
+            print(f"[frame] GUIDE {GUIDE_BUZZ.get(msg.get('dir'), '? unknown direction')}")
+            continue
         print(f"[frame] <- {json.dumps(msg)}")
+
+
+# Guidance from a remote helper: long pulses, so it never feels like an
+# approach alert (short pulses). An active alert always wins over guidance.
+GUIDE_BUZZ = {
+    "L": "<- LEFT     left motor: 2 long pulses (400 ms, gap 150 ms)",
+    "R": "-> RIGHT    right motor: 2 long pulses (400 ms, gap 150 ms)",
+    "fwd": "^  FORWARD  both motors: 2 medium pulses (250 ms, gap 150 ms)",
+    "stop": "X  STOP     both motors: one steady 1 s buzz",
+}
 
 
 def watch_heartbeat(state):

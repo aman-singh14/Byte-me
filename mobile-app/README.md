@@ -265,6 +265,57 @@ or changed in Settings > Together server.
   fills in from sensor samples until the real rings code implements it;
   swap it in `main.dart`. Only the percentages leave the phone.
 
+## Call a helper
+
+A helper (friend, family, guide) opens a link in any browser, sees the
+glasses' front or rear camera live, and guides the wearer with haptic arrows.
+Server: `backend/helper.py` (see `backend/README.md`). The app's side is
+`lib/helper/helper_call.dart` and `lib/screens/helper_screen.dart` (Aware
+tab, and a card on Today).
+
+- **Video:** the camera's original JPEGs go to the server over a WebSocket,
+  up to 10 fps, newest only, with at most two frames in flight (the server
+  acks each one), so a slow network drops frames instead of lagging. Frames
+  only go out while a helper is connected. Rear frames come from the rear
+  stream rear vision already has open (an ESP32-CAM serves one client at a
+  time); the front stream is opened only while the helper is watching it.
+- **Guidance:** the helper's Left / Forward / Right / Stop goes to the frame
+  as `{"t":"guide","dir":...}` (a buzz unlike any alert) and is spoken.
+- **Alerts** (approach and "someone behind you") are passed on to the helper.
+- Leaving the app while live ends the call; leaving while waiting (to send the
+  link) doesn't. Status is spoken, or announced to VoiceOver / TalkBack.
+- Not yet (build steps 3-5): two-way audio (LiveKit), the full helper page,
+  the LIVE LED on the glasses, keep-screen-on.
+
+Run it end to end on one laptop:
+
+```bash
+.venv/bin/python mock_glasses.py                    # glasses + webcam (repo root)
+```
+
+```bash
+.venv/bin/python -m backend.helper --port 8020      # helper server (repo root)
+```
+
+```bash
+flutter run --dart-define=FRONT_CAM_URL=http://localhost:81/stream
+```
+
+In the app: Aware (or Today) > **Call a helper**. Copy the link from the
+share sheet and open it in a browser. Arrow keys / Space or the buttons send
+guidance; the mock prints `[frame] GUIDE <- LEFT ...`.
+
+For a helper on another network, put the server behind HTTPS (no account
+needed for a quick tunnel) and build the app against it:
+
+```bash
+cloudflared tunnel --url http://localhost:8020
+```
+
+```bash
+flutter run --dart-define=HELPER_URL=https://<name>.trycloudflare.com --dart-define=FRONT_CAM_URL=http://front-cam.local:81/stream
+```
+
 ## Widget Gallery
 
 Debug builds only: Today > profile button (top right) > Developer > Widget
@@ -318,3 +369,9 @@ flutter test
   replaces any alert before it.
 - Suggested buzz patterns (the phone uses the same): level 1 one pulse,
   level 2 three strong pulses about 150 ms apart.
+- **`guide` (Call a helper): `{"t":"guide","dir":"L"|"R"|"fwd"|"stop"}`**, a
+  direction from a remote helper. It must feel different from alerts, so it
+  uses long pulses: `L`/`R` two 400 ms pulses (150 ms gap) on that side,
+  `fwd` two 250 ms pulses on both motors, `stop` one steady 1 s buzz on both.
+  An approach alert always wins: no guidance while an alert is buzzing.
+  `mock_glasses.py` prints each one with its pattern.
