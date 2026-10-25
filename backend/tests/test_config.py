@@ -20,7 +20,9 @@ class ProductConfig(unittest.TestCase):
 
     def test_cameras_are_esp32_streams_only(self):
         for name, cam in self.cfg["cameras"].items():
-            self.assertTrue(is_stream(cam["source"]), f"{name} source {cam['source']!r} is not an MJPEG URL")
+            src = cam["source"]
+            self.assertTrue(is_stream(src) or str(src).startswith("udp://"),
+                            f"{name} source {src!r} is not an ESP32 network stream (udp:// or MJPEG URL)")
             self.assertIsNone(cam.get("fallback"), f"{name} must not silently fall back")
         self.assertEqual(set(self.cfg["cameras"]), {"eye", "front"})
 

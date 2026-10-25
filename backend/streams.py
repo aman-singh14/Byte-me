@@ -1,6 +1,7 @@
 """Threaded camera readers that always hand out the newest frame.
 
-In the product every source is an ESP32-CAM MJPEG URL (http://eye-cam.local:81/stream).
+In the product every source is an ESP32-CAM sending JPEG frames over UDP (udp://eye-cam.local:81,
+backend/udp_camera.py). MJPEG URLs (http://...) still work.
 Dev stand-ins: a webcam index (0), a video file (looped), an image file (repeated),
 "sample:bus.jpg" (images bundled with ultralytics), "synthetic" (lgmd.py's looming
 square) or "synthetic-eye" (a rendered close-up eye for the product's pupil tracker). For a fake ESP32 over the network, run mock_glasses.py and use its URL.
@@ -28,6 +29,7 @@ SYNTHETIC_EYE = "synthetic-eye"      # backend/synth_eye.py: close-up eye with b
 SYNTHETIC_FRONT = "synthetic-front"  # backend/synth_front.py: phone / laptop / heads-up / outdoor loop
 SYNTH_FPS = 15
 STREAM_PREFIXES = ("http://", "https://", "rtsp://")
+UDP_PREFIX = "udp://"                 # ESP32-CAM UDP video (backend/udp_camera.py)
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 STILL_FPS = 15
 
@@ -76,6 +78,12 @@ class _Capture:
         self.cap = None
         self.still = None
         self.synth = None
+        self.udp = None
+        if isinstance(src, str) and src.startswith(UDP_PREFIX):
+            from backend.udp_camera import UdpCamera
+            self.udp = UdpCamera(src)
+            self.is_file = False
+            return
         if src == SYNTHETIC:
             self.synth = synthetic_frames()
         elif src == SYNTHETIC_EYE:
@@ -104,6 +112,8 @@ class _Capture:
         self.file_delay = 1.0 / (self.cap.get(cv2.CAP_PROP_FPS) or 30.0) if self.is_file else 0
 
     def opened(self):
+        if self.udp is not None:
+            return self.udp.opened()
         if self.synth is not None:
             return True
         if self.is_file and self.cap is None:
@@ -111,6 +121,8 @@ class _Capture:
         return self.cap is not None and self.cap.isOpened()
 
     def read(self):
+        if self.udp is not None:
+            return self.udp.read()
         if self.synth is not None:
             time.sleep(1 / SYNTH_FPS)
             return next(self.synth).copy()
@@ -126,6 +138,8 @@ class _Capture:
         return img if ok else None
 
     def release(self):
+        if self.udp is not None:
+            self.udp.release()
         if self.cap is not None:
             self.cap.release()
 

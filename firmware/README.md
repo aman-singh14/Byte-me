@@ -1,21 +1,22 @@
-# ESP32-CAM firmware (eye / front)
+# ESP32-CAM firmware (eye / front / back)
 
-One sketch per AI-Thinker ESP32-CAM board. They only stream video (no processing on the board):
+One sketch per AI-Thinker ESP32-CAM board. They only send pictures (no processing on the board):
 
 | Folder | Board | Role |
 |---|---|---|
-| `esp_camera_eye/` | esp_camera | EYE camera, facing the eye: 320x240 up to 25 fps |
-| `esp_camera2_front/` | esp_camera2 | FRONT camera, facing forward: 320x240 capped at 5 fps |
+| `esp_camera_eye/` | esp_camera | EYE camera, facing the eye: 320x240 grey, up to 25 fps |
+| `esp_camera2_front/` | esp_camera2 | FRONT camera, facing forward: 640x480 colour, 5 fps; stills up to 1600x1200 |
 | `esp_camera3_back/` | esp_camera3 | BACK camera + Tang Nano 20K FPGA collision detector (see the end of this file) |
 
-The eye and front sketches are the same code except for the name and frame rate. Each one serves:
+The eye and front sketches are the same code except for the settings at the top. Each one serves:
 
 | URL | What |
 |---|---|
-| `http://<ip>:8101/stream` (eye) / `:8102/stream` (front) | MJPEG 320x240: EYE up to 25 fps, FRONT capped at 5 fps |
-| `http://<ip>/capture?size=vga\|svga` | one 640x480 / 800x600 JPEG, on demand |
+| UDP 81 | live video: JPEG frames in 1400-byte chunks, sent to whoever sends `WANT` (`backend/udp_camera.py`; what the backend uses) |
+| `http://<ip>:81/stream` | the same video as MJPEG over HTTP, as in the team docs (one viewer at a time) |
+| `http://<ip>/capture?size=qvga\|vga\|svga\|xga\|sxga\|uxga` | one JPEG on demand (eye up to svga, front up to uxga 1600x1200) |
 | `http://<ip>/sensor` | live exposure (`aec_lines`) and gain (`gain_reg`) for outdoor detection |
-| `http://<ip>/status` | JSON: role, IP, RSSI, uptime, frames sent, free heap |
+| `http://<ip>/status` | JSON: role, IP, RSSI, uptime, viewers, frames sent/dropped, `bytes_per_s`, free heap |
 | UDP broadcast to port 4310, every 2 s | `{"t":"cam_hello","role":"eye","ip":...}`: the backend finds the camera by itself |
 
 Wi-Fi is station mode only: all three cameras join the `espholder` network, password `12345678`
@@ -23,14 +24,15 @@ Wi-Fi is station mode only: all three cameras join the `espholder` network, pass
 
 ## Ports
 
-Each camera's live stream has its own port. Laptop side: backend API 8001, Together server 8000,
+Eye and front both stream on port 81 (team docs), each on its own IP, so they never clash; TCP 81
+(MJPEG) and UDP 81 (chunked frames) are separate port spaces. Laptop side: backend API 8001, Together server 8000,
 camera hellos UDP 4310, phone app UDP 4210 (mock_glasses 4211/4212), helper relay 8020, OBS 4455,
 macOS AirPlay 5000/7000.
 
 | Camera | Board | Live stream | Other |
 |---|---|---|---|
-| EYE | esp_camera (`esp_camera_eye/`) | `http://<ip>:8101/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
-| FRONT | esp_camera2 (`esp_camera2_front/`) | `http://<ip>:8102/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
+| EYE | esp_camera (`esp_camera_eye/`) | UDP 81 (JPEG chunks) and `http://<ip>:81/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
+| FRONT | esp_camera2 (`esp_camera2_front/`) | UDP 81 (JPEG chunks) and `http://<ip>:81/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
 | BACK | esp_camera3 (`esp_camera3_back/`) | UDP 4300 (JPEG chunks + status JSON) | none |
 
 UDP 4300 is also where the backend listens for the FPGA's binary rear-event packets
@@ -70,7 +72,7 @@ TX goes to RX: the FTDI's transmit pin connects to the board's receive pin.
 3. Upload. When it prints `Connecting....`, press RST again if it doesn't catch.
 4. **Remove the GPIO0–GND wire** and press RST. The firmware only runs with GPIO0 floating.
 5. Open the Serial Monitor at 115200 baud. You should see the IP and
-   `mDNS: http://front-cam.local:8102/stream`.
+   `video:   UDP <ip>:81 (send WANT to receive), http://<ip>:81/stream`.
 
 The red LED on the back blinks while it connects to Wi-Fi and stays on once connected.
 
@@ -91,7 +93,9 @@ resolve `.local` names; if the hello doesn't arrive either, set `static_ip` to t
 Serial Monitor printed, or `BACKEND_HOST` in `secrets.h` so the hello is sent straight to
 the laptop.
 
-Quick check from the laptop: open `http://<ip>:8101/stream` (eye) or `:8102/stream` (front) and `http://<ip>/sensor` in a browser.
+Quick check from the laptop: open `http://<ip>/status` and `http://<ip>/capture` in a browser, or watch the video with
+`python -m backend.streams udp://<ip>:81`, or open `http://<ip>:81/stream` in a browser. Without the boards,
+`python tools/fake_udp_camera.py` pretends to be both cameras on this laptop.
 
 ## Troubleshooting
 
@@ -100,7 +104,7 @@ Quick check from the laptop: open `http://<ip>:8101/stream` (eye) or `:8102/stre
 | `camera init failed: 0x105` | Ribbon cable not seated: lift the black latch, reseat, close |
 | `Brownout detector was triggered` | Power from 5 V, not 3.3 V; use a short, thick cable from the power bank |
 | Never joins Wi-Fi | 2.4 GHz only. On iPhone, turn on Maximize Compatibility and keep the Hotspot screen open while it joins |
-| Stream lags 1 s+ | Raise `JPEG_QUALITY` (e.g. 20) or lower `STREAM_MAX_FPS`; only one client per stream at a time |
+| Video stutters or `frames_dropped` climbs in `/status` | Weak Wi-Fi: move closer to the hotspot, raise `JPEG_QUALITY` (e.g. 20) or lower `STREAM_MAX_FPS` |
 | Upload fails: `Failed to connect` | GPIO0 not grounded, or TX/RX swapped |
 | Image upside down in the mount | `FLIP_VERTICAL 1` (and/or `MIRROR 1`) |
 | `/sensor` says "register read failed" | Older esp32-camera without `get_reg`: update the esp32 core |

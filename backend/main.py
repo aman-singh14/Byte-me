@@ -154,7 +154,7 @@ class Runtime:
             return None
         size = self.cfg["cameras"].get("front", {}).get("still_size", "vga")
         try:
-            with urllib.request.urlopen(f"{base}/capture?size={size}", timeout=3) as r:
+            with urllib.request.urlopen(f"{base}/capture?size={size}", timeout=6) as r:   # uxga: ~0.5-1 s
                 buf = np.frombuffer(r.read(), np.uint8)
             return cv2.imdecode(buf, cv2.IMREAD_COLOR)
         except (OSError, ValueError):

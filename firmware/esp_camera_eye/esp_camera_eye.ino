@@ -1,17 +1,32 @@
 // esp_camera: the EYE camera (AI-Thinker ESP32-CAM, OV2640, facing the eye).
-// It only streams; all processing happens in the backend on the laptop.
-// The other camera's sketch is in ../esp_camera2_front/.
+// It only sends pictures; all processing happens in the backend on the laptop.
+// The other cameras' sketches are in ../esp_camera2_front/ and ../esp_camera3_back/.
 //
-//   http://<ip>:8101/stream              MJPEG, 320x240, up to 25 fps
-//   http://<ip>/capture?size=vga|svga   one JPEG at 640x480 / 800x600, on demand (then back to 320x240)
-//   http://<ip>/sensor                  live auto-exposure (AEC) and gain (AGC), for outdoor detection
-//   http://<ip>/status                  role, IP, RSSI, uptime, frames sent
-//   UDP hello to port 4310 every 2 s    {"t":"cam_hello","role":"eye","ip":"192.168.x.x",...}
+//   UDP 81 (live video)                  JPEG frames, 320x240 grey, up to 25 fps, sent only to
+//                                        viewers that asked for them (see "UDP video" below); the backend uses this
+//   http://<ip>:81/stream                the same video as MJPEG over HTTP, as in the team docs (one viewer at a time)
+//   http://<ip>/capture?size=...         one JPEG on demand: qvga 320x240, vga 640x480, svga 800x600,
+//                                        xga 1024x768, sxga 1280x1024, uxga 1600x1200 (up to svga)
+//   http://<ip>/sensor                   live auto-exposure (AEC) and gain (AGC), for outdoor detection
+//   http://<ip>/status                   role, IP, RSSI, uptime, frames and bytes sent, viewers
+//   UDP hello to port 4310 every 2 s     {"t":"cam_hello","role":"eye","ip":"172.20.10.x","stream_port":81,
+//                                         "http_port":80,"stream":"udp",...}
+// Ports follow the team docs: video on 81 (TCP for MJPEG, UDP for the chunked frames: separate port
+// spaces, so they never clash), stills/sensor/status on 80. Eye and front both use 81 on their own IPs.
+//
+// UDP video: a viewer (the backend) sends a datagram starting with "WANT" to UDP 81 at least
+// every VIEWER_TIMEOUT_MS; the camera then sends each new frame to the address and port that
+// datagram came from ("STOP" ends it). Every frame is cut into chunks of at most 1400 bytes, each
+// with a 16-byte header (little-endian):
+//     "CAMV"  frame_id u32  chunk u16  chunks u16  jpeg_len u32       then the chunk's JPEG bytes
+// (the same layout as the back camera's "OMNV" packets). A frame with a missing chunk is dropped by
+// the viewer; the next frame replaces it. No retransmission, no waiting: the newest frame always wins.
+// Stills (/capture) stay on HTTP/TCP: one big picture must arrive complete.
 //
 // Wi-Fi: station mode only (no access point). It joins the network in secrets.h ("espholder"),
-// reconnects if it drops and prints its IP over serial at boot.
+// keeps retrying until it is there, reconnects if it drops and prints its IP over serial at boot.
 //
-// Board: "AI Thinker ESP32-CAM" (esp32 core 2.x or 3.x). Partition scheme: Huge APP.
+// Board: "AI Thinker ESP32-CAM" (esp32 core 3.x). Partition scheme: Huge APP.
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -22,14 +37,19 @@
 
 // ---- this board ----------------------------------------------------------------
 #define DEVICE_NAME "eye"              // mDNS eye-cam.local, "role" in the UDP hello
+#define STREAM_PORT 81                 // live video: UDP 81 and http://<ip>:81/stream (team docs)
 #define STREAM_MAX_FPS 25              // blinks need frame rate more than detail
-#define STREAM_PORT 8101       // this camera's live stream (eye 8101, front 8102; back camera: UDP 4300)
 #define STREAM_SIZE FRAMESIZE_QVGA     // 320x240
+#define STILL_MAX FRAMESIZE_SVGA       // largest /capture size (sets how much picture memory is reserved)
 #define JPEG_QUALITY 12                // 10 (best) .. 63 (smallest)
+#define GREYSCALE 1                    // grey picture: the eye tracking only uses brightness, and it is a bit smaller
 #define FLIP_VERTICAL 0                // set to 1 if the image is upside down in the mount
 #define MIRROR 0
 #define HELLO_PORT 4310
 #define HELLO_EVERY_MS 2000
+#define MAX_VIEWERS 3                  // backend + up to two more (e.g. a second laptop)
+#define VIEWER_TIMEOUT_MS 5000         // a viewer must send WANT at least this often
+#define CHUNK_BYTES 1400               // JPEG bytes per datagram (16-byte header + 1400 < 1472: no IP fragments)
 
 // ---- AI-Thinker pin map ---------------------------------------------------------
 #define PWDN_GPIO_NUM 32
@@ -51,63 +71,165 @@
 #define LED_GPIO_NUM 33   // small red LED on the back, active low
 #define FLASH_GPIO_NUM 4  // bright white flash LED: keep it off
 
+struct Viewer {
+  IPAddress ip;
+  uint16_t port;
+  uint32_t last;
+};
+
 #define PART_BOUNDARY "123456789000000000000987654321"
-static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
-static const char *STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
-static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+static const char *MJPEG_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
+static const char *MJPEG_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
+static const char *MJPEG_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
 static httpd_handle_t control_httpd = NULL;
 static httpd_handle_t stream_httpd = NULL;
-static volatile uint32_t frames_sent = 0;
-static volatile uint8_t stream_clients = 0;
+static volatile uint8_t mjpeg_clients = 0;
 static SemaphoreHandle_t cam_lock;      // /capture changes the frame size; the stream must wait
-static WiFiUDP udp;
+static WiFiUDP udp;                     // UDP STREAM_PORT: WANT/STOP in, video and hellos out
+static Viewer viewers[MAX_VIEWERS];
+static int n_viewers = 0;
+static volatile uint32_t frames_sent = 0, frames_dropped = 0, frame_id = 0;
+static volatile uint32_t bytes_window = 0, bytes_per_s = 0, last_frame_bytes = 0;
 
 // OV2640 sensor-bank registers (bank 1): get_reg() takes (bank << 8) | address.
 #define SENSOR_REG(a) (0x100 | (a))
 
+// ---- UDP video -------------------------------------------------------------------
+
+static void poll_viewers() {
+  int n = udp.parsePacket();
+  while (n > 0) {
+    char head[4] = {0};
+    udp.read((uint8_t *)head, sizeof(head));
+    IPAddress ip = udp.remoteIP();
+    uint16_t port = udp.remotePort();
+    int i = 0;
+    while (i < n_viewers && !(viewers[i].ip == ip && viewers[i].port == port)) i++;
+    if (n >= 4 && memcmp(head, "WANT", 4) == 0) {
+      if (i < n_viewers) {
+        viewers[i].last = millis();
+      } else if (n_viewers < MAX_VIEWERS) {
+        viewers[n_viewers++] = {ip, port, millis()};
+        Serial.printf("viewer %s:%u\n", ip.toString().c_str(), port);
+      }
+    } else if (n >= 4 && memcmp(head, "STOP", 4) == 0 && i < n_viewers) {
+      viewers[i] = viewers[--n_viewers];
+    }
+    while (udp.available()) udp.read();
+    n = udp.parsePacket();
+  }
+  uint32_t now = millis();
+  int k = 0;                                     // forget viewers that stopped asking
+  for (int i = 0; i < n_viewers; i++)
+    if (now - viewers[i].last < VIEWER_TIMEOUT_MS) viewers[k++] = viewers[i];
+  n_viewers = k;
+}
+
+// One datagram. If the Wi-Fi driver is out of buffers, give it a moment and try again.
+static bool send_chunk(const Viewer &v, const uint8_t *hdr, const uint8_t *data, size_t n) {
+  for (int attempt = 0; attempt < 4; attempt++) {
+    if (udp.beginPacket(v.ip, v.port) && udp.write(hdr, 16) == 16 && udp.write(data, n) == n && udp.endPacket())
+      return true;
+    delay(2);
+  }
+  return false;
+}
+
+static void send_frame(const camera_fb_t *fb) {
+  uint16_t chunks = (fb->len + CHUNK_BYTES - 1) / CHUNK_BYTES;
+  uint32_t id = ++frame_id, len = fb->len;
+  uint8_t hdr[16] = {'C', 'A', 'M', 'V'};
+  memcpy(hdr + 4, &id, 4);
+  memcpy(hdr + 10, &chunks, 2);
+  memcpy(hdr + 12, &len, 4);
+  bool ok = true;
+  for (int v = 0; v < n_viewers; v++) {
+    for (uint16_t c = 0; c < chunks; c++) {
+      memcpy(hdr + 8, &c, 2);
+      size_t off = (size_t)c * CHUNK_BYTES, n = min((size_t)CHUNK_BYTES, fb->len - off);
+      if (!send_chunk(viewers[v], hdr, fb->buf + off, n)) {
+        ok = false;                              // the viewer drops this frame; carry on with the next
+        break;
+      }
+    }
+  }
+  if (ok) frames_sent++; else frames_dropped++;
+  last_frame_bytes = fb->len;
+  bytes_window += fb->len * n_viewers;
+}
+
+static void stream_step() {
+  static uint32_t last = 0, window_start = 0;
+  uint32_t now = millis();
+  if (now - window_start >= 1000) {
+    bytes_per_s = bytes_window * 1000 / max(now - window_start, (uint32_t)1);
+    bytes_window = 0;
+    window_start = now;
+  }
+  if (n_viewers == 0 || now - last < 1000 / STREAM_MAX_FPS) return;
+  last = now;
+  xSemaphoreTake(cam_lock, portMAX_DELAY);
+  camera_fb_t *fb = esp_camera_fb_get();
+  xSemaphoreGive(cam_lock);
+  if (!fb) {
+    Serial.println("camera capture failed");
+    return;
+  }
+  send_frame(fb);
+  esp_camera_fb_return(fb);
+}
+
+// ---- MJPEG over HTTP (http://<ip>:81/stream) -------------------------------------
+
 static esp_err_t stream_handler(httpd_req_t *req) {
   char part[64];
-  esp_err_t res = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
+  esp_err_t res = httpd_resp_set_type(req, MJPEG_TYPE);
   if (res != ESP_OK) return res;
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-  stream_clients++;
-  const uint32_t min_ms = 1000 / STREAM_MAX_FPS;
+  mjpeg_clients++;
   uint32_t last = 0;
   while (true) {
     uint32_t now = millis();
-    if (now - last < min_ms) {
-      delay(min_ms - (now - last));
-    }
+    if (now - last < 1000 / STREAM_MAX_FPS) delay(1000 / STREAM_MAX_FPS - (now - last));
     last = millis();
     xSemaphoreTake(cam_lock, portMAX_DELAY);
     camera_fb_t *fb = esp_camera_fb_get();
     xSemaphoreGive(cam_lock);
     if (!fb) {
-      Serial.println("camera capture failed");
       res = ESP_FAIL;
       break;
     }
-    size_t hlen = snprintf(part, sizeof(part), STREAM_PART, fb->len);
-    res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
+    size_t hlen = snprintf(part, sizeof(part), MJPEG_PART, fb->len);
+    res = httpd_resp_send_chunk(req, MJPEG_BOUNDARY, strlen(MJPEG_BOUNDARY));
     if (res == ESP_OK) res = httpd_resp_send_chunk(req, part, hlen);
     if (res == ESP_OK) res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
     esp_camera_fb_return(fb);
-    if (res != ESP_OK) break;   // client went away
-    frames_sent++;
+    if (res != ESP_OK) break;   // viewer went away
   }
-  stream_clients--;
+  mjpeg_clients--;
   return res;
 }
 
-// /capture?size=qvga|vga|svga: switch the sensor up, drop the stale frames, grab one, switch back.
+// ---- HTTP: stills, sensor, status ------------------------------------------------
+
+static framesize_t parse_size(const char *size) {
+  framesize_t fs = strcmp(size, "qvga") == 0   ? FRAMESIZE_QVGA
+                   : strcmp(size, "svga") == 0 ? FRAMESIZE_SVGA
+                   : strcmp(size, "xga") == 0  ? FRAMESIZE_XGA
+                   : strcmp(size, "sxga") == 0 ? FRAMESIZE_SXGA
+                   : strcmp(size, "uxga") == 0 ? FRAMESIZE_UXGA
+                                               : FRAMESIZE_VGA;
+  return fs > STILL_MAX ? STILL_MAX : fs;        // the framesize_t values grow with the picture size
+}
+
+// /capture?size=...: switch the sensor up, drop the stale frames, grab one, switch back.
 static esp_err_t capture_handler(httpd_req_t *req) {
   char query[32] = {0}, size[8] = "vga";
   if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
     httpd_query_key_value(query, "size", size, sizeof(size));
   }
-  framesize_t fs = strcmp(size, "svga") == 0 ? FRAMESIZE_SVGA : strcmp(size, "qvga") == 0 ? FRAMESIZE_QVGA
-                                                                                           : FRAMESIZE_VGA;
+  framesize_t fs = parse_size(size);
   sensor_t *s = esp_camera_sensor_get();
   xSemaphoreTake(cam_lock, portMAX_DELAY);
   if (fs != STREAM_SIZE) s->set_framesize(s, fs);
@@ -163,18 +285,20 @@ static esp_err_t sensor_handler(httpd_req_t *req) {
 }
 
 static esp_err_t status_handler(httpd_req_t *req) {
-  char json[256];
+  char json[360];
   snprintf(json, sizeof(json),
-           "{\"role\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"frames_sent\":%lu,"
-           "\"stream_clients\":%u,\"max_fps\":%d,\"free_heap\":%u}",
-           DEVICE_NAME, WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000,
-           (unsigned long)frames_sent, stream_clients, STREAM_MAX_FPS, ESP.getFreeHeap());
+           "{\"role\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"stream\":\"udp\",\"stream_port\":%d,"
+           "\"viewers\":%d,\"mjpeg_clients\":%u,\"frames_sent\":%lu,\"frames_dropped\":%lu,\"last_frame_bytes\":%lu,"
+           "\"bytes_per_s\":%lu,\"max_fps\":%d,\"free_heap\":%u}",
+           DEVICE_NAME, WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000, STREAM_PORT,
+           n_viewers, mjpeg_clients, (unsigned long)frames_sent, (unsigned long)frames_dropped,
+           (unsigned long)last_frame_bytes, (unsigned long)bytes_per_s, STREAM_MAX_FPS, ESP.getFreeHeap());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, json, strlen(json));
 }
 
-static void start_servers() {
+static void start_server() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   httpd_uri_t capture_uri = {.uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL};
@@ -185,7 +309,7 @@ static void start_servers() {
     httpd_register_uri_handler(control_httpd, &sensor_uri);
     httpd_register_uri_handler(control_httpd, &status_uri);
   }
-  // The stream gets its own server (STREAM_PORT) so a long-lived stream never blocks the others.
+  // MJPEG gets its own server on port 81 so a long-lived stream never blocks the others.
   config.server_port = STREAM_PORT;
   config.ctrl_port += 1;
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
@@ -193,6 +317,8 @@ static void start_servers() {
     httpd_register_uri_handler(stream_httpd, &stream_uri);
   }
 }
+
+// ---- camera and Wi-Fi --------------------------------------------------------------
 
 static bool init_camera() {
   camera_config_t c = {};
@@ -216,8 +342,8 @@ static bool init_camera() {
   c.pin_reset = RESET_GPIO_NUM;
   c.xclk_freq_hz = 20000000;
   c.pixel_format = PIXFORMAT_JPEG;
-  // Allocate for the largest still we serve (SVGA); the sensor then runs at the stream size.
-  c.frame_size = FRAMESIZE_SVGA;
+  // Reserve memory for the largest still we serve; the sensor then runs at the stream size.
+  c.frame_size = STILL_MAX;
   c.jpeg_quality = JPEG_QUALITY;
   c.grab_mode = CAMERA_GRAB_LATEST;   // always the newest frame: lower latency, drops old ones
   if (psramFound()) {
@@ -237,6 +363,7 @@ static bool init_camera() {
   s->set_framesize(s, STREAM_SIZE);
   s->set_vflip(s, FLIP_VERTICAL);
   s->set_hmirror(s, MIRROR);
+  s->set_special_effect(s, GREYSCALE ? 2 : 0);   // 2 = grayscale
   s->set_exposure_ctrl(s, 1);   // auto exposure on: /sensor reports what it chose
   s->set_gain_ctrl(s, 1);
   return true;
@@ -252,7 +379,7 @@ static void wait_for_wifi(uint32_t timeout_ms) {
 }
 
 static void connect_wifi() {
-  WiFi.softAPdisconnect(true);  // never an access point: we join the phone hotspot
+  WiFi.softAPdisconnect(true);  // never an access point: we join the network
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
@@ -269,12 +396,12 @@ static void connect_wifi() {
   Serial.printf("\nconnected, IP %s, RSSI %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
-// Tell the backend where we are: broadcast on the hotspot, and unicast to BACKEND_HOST if set.
+// Tell the backend where we are: broadcast on the network, and unicast to BACKEND_HOST if set.
 static void send_hello() {
-  char msg[160];
+  char msg[200];
   int n = snprintf(msg, sizeof(msg),
-                   "{\"t\":\"cam_hello\",\"role\":\"%s\",\"ip\":\"%s\",\"stream_port\":%d,\"http_port\":80,"
-                   "\"max_fps\":%d}",
+                   "{\"t\":\"cam_hello\",\"role\":\"%s\",\"ip\":\"%s\",\"stream\":\"udp\",\"stream_port\":%d,"
+                   "\"http_port\":80,\"max_fps\":%d}",
                    DEVICE_NAME, WiFi.localIP().toString().c_str(), STREAM_PORT, STREAM_MAX_FPS);
   udp.beginPacket(IPAddress(255, 255, 255, 255), HELLO_PORT);
   udp.write((const uint8_t *)msg, n);
@@ -303,19 +430,22 @@ void setup() {
   connect_wifi();
   if (MDNS.begin(DEVICE_NAME "-cam")) {
     MDNS.addService("http", "tcp", 80);
-    Serial.printf("mDNS: http://%s-cam.local:%d/stream\n", DEVICE_NAME, STREAM_PORT);
+    Serial.printf("mDNS: %s-cam.local\n", DEVICE_NAME);
   }
-  start_servers();
-  udp.begin(HELLO_PORT);
-  Serial.printf("stream:  http://%s:%d/stream\n", WiFi.localIP().toString().c_str(), STREAM_PORT);
+  start_server();
+  udp.begin(STREAM_PORT);
+  Serial.printf("video:   UDP %s:%d (send WANT to receive), http://%s:%d/stream\n", WiFi.localIP().toString().c_str(),
+                STREAM_PORT, WiFi.localIP().toString().c_str(), STREAM_PORT);
+  Serial.printf("status:  http://%s/status\n", WiFi.localIP().toString().c_str());
 }
 
 void loop() {
   static uint32_t last_hello = 0;
   if (WiFi.status() != WL_CONNECTED) {
-    // The hotspot dropped (phone locked, walked away): auto-reconnect is on, but give it a push.
+    // The network dropped (phone locked, walked away): auto-reconnect is on, but give it a push.
     Serial.println("Wi-Fi lost, reconnecting");
     digitalWrite(LED_GPIO_NUM, HIGH);
+    n_viewers = 0;
     WiFi.reconnect();
     wait_for_wifi(20000);
     if (WiFi.status() != WL_CONNECTED) ESP.restart();
@@ -327,5 +457,7 @@ void loop() {
     last_hello = millis();
     send_hello();
   }
-  delay(50);
+  poll_viewers();
+  stream_step();
+  delay(1);
 }

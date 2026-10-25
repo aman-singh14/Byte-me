@@ -1,31 +1,31 @@
 # Backend config: THE PRODUCT.
 #
-#   EYE    ESP32-CAM ~3 cm from one eye, MJPEG over Wi-Fi   -> close-up pupil tracking
-#   FRONT  ESP32-CAM looking outward, MJPEG over Wi-Fi      -> distance to screen, "what am I looking at?"
+#   EYE    ESP32-CAM ~3 cm from one eye, JPEG frames over UDP   -> close-up pupil tracking
+#   FRONT  ESP32-CAM looking outward, JPEG frames over UDP      -> distance to screen, "what am I looking at?"
 #   REAR   OV2640 on the FPGA; LGMD runs in hardware and sends EVENT + last 3 s of video
 #          over docs/rear_event_protocol.md                 -> classify + warn
 #
 # No laptop webcam is part of the product. Development stand-ins (webcam, still images,
 # mock FPGA) live in config.dev.yaml: python -m backend.main --dev
 #
-# A camera "source" is an MJPEG URL. If a stream is down there is no fallback here:
+# A camera "source" is udp://<camera>:<port> (backend/udp_camera.py) or an MJPEG URL. If a stream is down there is no fallback here:
 # the dashboard shows "EYE camera offline" and the reader retries every reconnect_s.
 # (Sources can also be a webcam index, a video/image file or "synthetic"; those are for dev.)
 
 cameras:
   eye:
-    source: "http://eye-cam.local:8101/stream"
-    stream_port: 8101     # EYE live stream (firmware/esp_camera_eye)
+    source: "udp://eye-cam.local:81"
+    stream_port: 81       # EYE live video, UDP 81 (also MJPEG at http://<ip>:81/stream): 320x240 grey, 25 fps
     static_ip: null       # e.g. 172.20.10.3 if mDNS doesn't resolve on the hotspot (the hello usually makes this unnecessary)
     fallback: null
     fps: 25               # 320x240 at ~20-25 fps: frame rate matters more than detail for blinks
   front:
-    source: "http://front-cam.local:8102/stream"
-    stream_port: 8102     # FRONT live stream (firmware/esp_camera2_front)
+    source: "udp://front-cam.local:81"
+    stream_port: 81       # FRONT live video, UDP 81 (also MJPEG at http://<ip>:81/stream): 640x480 colour, 5 fps
     static_ip: null
     fallback: null
-    fps: 3                # 320x240 stream, analysed 2-5 times a second (YOLO near-work + brightness)
-    still_size: vga       # one /capture?size=vga|svga still, on demand only (for Muse)
+    fps: 3                # 640x480 stream, analysed ~3 times a second (YOLO near-work + brightness)
+    still_size: uxga      # one 1600x1200 /capture still, on demand only ("what am I looking at?": YOLO + Muse)
   # BACK camera (firmware/esp_camera3_back): UDP 4300, its own video + status format; the backend does
   # not read it yet (its rear receiver below also uses UDP 4300 and skips those packets).
   # For rear.mode: software, add  rear: {source: "<MJPEG URL>"}
@@ -143,8 +143,8 @@ muse:                     # Meta Muse Spark via the Model API (backend/muse_clie
   daily_cap_usd: 5.0
   max_calls_per_min: 6
   prior_spend_usd: 0.0033 # calls made before this database (2 key checks + 1 whose log was reset)
-  image_max_side: 512     # frames are downscaled + JPEG'd before sending (~300 tokens)
-  image_quality: 70
+  image_max_side: 1024    # frames are downscaled + JPEG'd before sending (more detail for small objects and text)
+  image_quality: 80
   price_per_mtok:         # Standard tier, from Meta's pricing page
     input: 1.25
     cached_input: 0.15

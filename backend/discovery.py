@@ -2,7 +2,10 @@
 
 Each camera broadcasts a hello every 2 s (firmware/esp_camera_eye, firmware/esp_camera2_front):
 
-    {"t": "cam_hello", "role": "eye" | "front", "ip": "172.20.10.3", "stream_port": 8101, "http_port": 80}
+    {"t": "cam_hello", "role": "eye" | "front", "ip": "172.20.10.3", "stream": "udp", "stream_port": 81,
+     "http_port": 80}
+
+("stream": "udp" = JPEG frames over UDP, see backend/udp_camera.py; without it, MJPEG over HTTP.)
 
 on UDP port 4310. Stream URL order for a camera: the IP it announced (if heard in the
 last `fresh_s`), then the configured URL (an mDNS name like eye-cam.local, which iPhone
@@ -31,7 +34,11 @@ def parse_hello(data):
     if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
         return None
     return {"role": msg["role"], "ip": ip, "stream_port": int(msg.get("stream_port", 81)),
-            "http_port": int(msg.get("http_port", 80))}
+            "http_port": int(msg.get("http_port", 80)), "stream": "udp" if msg.get("stream") == "udp" else "mjpeg"}
+
+
+def stream_url(ip, port, udp):
+    return f"udp://{ip}:{port}" if udp else f"http://{ip}:{port}/stream"
 
 
 class CameraDirectory:
@@ -73,12 +80,14 @@ class CameraDirectory:
         out = []
         a = self.announced(role, now)
         if a:
-            out.append(f"http://{a['ip']}:{a['stream_port']}/stream")
+            out.append(stream_url(a["ip"], a["stream_port"], a.get("stream") == "udp"))
         cam = self.cams.get(role, {})
-        if isinstance(cam.get("source"), str):
-            out.append(cam["source"])
+        src = cam.get("source")
+        if isinstance(src, str):
+            out.append(src)
         if cam.get("static_ip"):
-            out.append(f"http://{cam['static_ip']}:{cam.get('stream_port', 81)}/stream")
+            udp = isinstance(src, str) and src.startswith("udp://")
+            out.append(stream_url(cam["static_ip"], cam.get("stream_port", 81), udp))
         return list(dict.fromkeys(out))
 
     def stream_url(self, role, now=None):
@@ -92,8 +101,8 @@ class CameraDirectory:
             return f"http://{a['ip']}" + ("" if a["http_port"] == 80 else f":{a['http_port']}")
         cam = self.cams.get(role, {})
         src = cam.get("source")
-        if isinstance(src, str) and src.startswith("http://"):
-            host = src[len("http://"):].split("/")[0].split(":")[0]
+        if isinstance(src, str) and src.startswith(("http://", "udp://")):
+            host = src.split("://", 1)[1].split("/")[0].split(":")[0]
             return f"http://{host}"
         if cam.get("static_ip"):
             return f"http://{cam['static_ip']}"
