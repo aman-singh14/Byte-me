@@ -320,11 +320,7 @@ class AlertEngine {
   /// head turns toward the wearer's left.
   List<AlertEvent> addSens(DateTime at, {required num yawRate, required num lux}) {
     _updateLight(lux.toDouble());
-
-    if (yawRate.abs() >= turnRate) {
-      if (!isTurning(at)) tracker.resetMotion(); // sizes from before the turn don't compare
-      _turningUntil = at.add(turnSettle);
-    }
+    _noteTurn(at, yawRate);
     _yaw.add((at, yawRate.toDouble()));
     _yaw.removeWhere((s) => at.difference(s.$1) > glanceWindow);
 
@@ -337,6 +333,20 @@ class AlertEngine {
       events.add(AlertCleared(current, ClearReason.silenced));
     }
     return events..addAll(_evaluate(at));
+  }
+
+  /// How fast the head turns (degrees per second) when the direction isn't
+  /// known: the back camera's FPGA gyro gives only the size. It pauses
+  /// approach tracking like any turn, but can't count as a glance back.
+  List<AlertEvent> addTurnRate(DateTime at, num degreesPerSecond) {
+    _noteTurn(at, degreesPerSecond);
+    return _evaluate(at);
+  }
+
+  void _noteTurn(DateTime at, num rate) {
+    if (rate.abs() < turnRate) return;
+    if (!isTurning(at)) tracker.resetMotion(); // sizes from before the turn don't compare
+    _turningUntil = at.add(turnSettle);
   }
 
   /// The wearer dismissed the current alert in the app. Like a glance, it

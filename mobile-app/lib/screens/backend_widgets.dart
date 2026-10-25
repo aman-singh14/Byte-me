@@ -1,4 +1,5 @@
-// Shared pieces for screens that show data from the laptop backend.
+// Shared pieces for screens that show eye, near-work and ring data (from the
+// phone itself, or a laptop backend).
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -69,15 +70,17 @@ class BackendSettingsTile extends StatelessWidget {
     if (link == null) return const SizedBox.shrink();
     final base = link.baseUrl;
     final source = link.manualUrl != null ? 'typed in' : (link.discoveredUrl != null ? 'found automatically' : null);
-    final status = switch (link.status) {
-      BackendStatus.notConfigured => 'Not set',
-      BackendStatus.connecting => 'Connecting',
-      BackendStatus.connected => 'Connected',
-      BackendStatus.unreachable => 'Not answering',
-    };
+    final status = link.onPhone
+        ? 'Not needed: eyes, near-work and rings run on this phone'
+        : switch (link.status) {
+            BackendStatus.notConfigured => 'Not set',
+            BackendStatus.connecting => 'Connecting',
+            BackendStatus.connected => 'Connected',
+            BackendStatus.unreachable => 'Not answering',
+          };
     return ListTile(
       leading: const Icon(Symbols.laptop_mac_rounded),
-      title: const Text('Laptop (backend)'),
+      title: const Text('Laptop (optional)'),
       subtitle: Text(base == null ? status : '$status · ${base.authority}${source == null ? '' : ' ($source)'}'),
       trailing: const Icon(Symbols.edit_rounded),
       onTap: () => _edit(context, link),
@@ -95,7 +98,8 @@ class BackendSettingsTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              "The laptop's IP on the hotspot, e.g. 172.20.10.2. Leave empty to find it automatically"
+              "The laptop's IP on the hotspot, e.g. 172.20.10.2, to run eye tracking there instead. Leave "
+              'empty to use this phone, or a laptop that says hello'
               '${link.discoveredUrl != null ? ' (now ${link.discoveredUrl!.authority})' : ''}.',
             ),
             SizedBox(height: context.space.m),
@@ -138,7 +142,7 @@ class _DevOutsideTileState extends State<DevOutsideTile> {
     if (link == null || !kDebugMode) return const SizedBox.shrink();
     return ListTile(
       leading: const Icon(Symbols.sunny_rounded),
-      title: const Text('Outside (dev backend only)'),
+      title: const Text('Outside (debug)'),
       subtitle: Padding(
         padding: EdgeInsets.only(top: context.space.s),
         child: SegmentedButton<int>(

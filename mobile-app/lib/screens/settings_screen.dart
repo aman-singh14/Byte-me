@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 
+import '../alerts/voice.dart';
+import '../eyes/gaze.dart' show gazePrompt;
+import '../eyes/phone_eyes.dart';
 import '../gallery/widget_gallery.dart';
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
@@ -38,21 +41,29 @@ class SettingsScreen extends StatelessWidget {
           ),
           ListTile(
             leading: const Icon(Symbols.videocam_rounded),
-            title: const Text('Rear camera'),
-            subtitle: Text(link.streamUrl?.toString() ?? 'Not found'),
+            title: const Text('Back camera + FPGA'),
+            subtitle: Text(_backText(link)),
           ),
+          ListTile(
+            leading: const Icon(Symbols.photo_camera_front_rounded),
+            title: const Text('Front camera'),
+            subtitle: Text(link.frontCam?.video.toString() ?? 'Not found'),
+          ),
+          const _EyeCameraTile(),
           const BackendSettingsTile(),
+          const _VoiceTile(),
           ListTile(
             leading: const Icon(Symbols.motion_sensor_active_rounded),
-            title: const Text('Reflex camera'),
-            subtitle: Text(link.camBStreamUrl?.toString() ?? 'Not found'),
+            title: const Text('Rear and reflex cameras (mock)'),
+            subtitle: Text('${link.streamUrl ?? 'Not found'} · ${link.camBStreamUrl ?? 'not found'}'),
           ),
           ListTile(
             leading: const Icon(Symbols.wifi_tethering_rounded),
             title: const Text('How pairing works'),
             subtitle: Text(
-              "Turn on your phone's hotspot. The glasses join it and say hello to "
-              'this app on UDP port $appUdpPort. No venue Wi-Fi needed.',
+              "Turn on your phone's hotspot. The camera boards join it and say hello on UDP "
+              '$camHelloPort; the back camera talks on UDP $backCamPort (and mock_glasses.py on '
+              '$appUdpPort). No venue Wi-Fi needed.',
             ),
           ),
           const _TogetherSettings(),
@@ -61,7 +72,7 @@ class SettingsScreen extends StatelessWidget {
           const ListTile(
             leading: Icon(Symbols.videocam_off_rounded),
             title: Text('Camera and voice processing'),
-            subtitle: Text('Rear alerts run on this phone. Voice questions use your device’s speech service and the laptop backend. Richer descriptions use Muse when configured.'),
+            subtitle: Text('Rear alerts, eye tracking and near-work run on this phone. Voice questions use your device’s speech service. Richer descriptions use Muse when configured.'),
           ),
           const ListTile(
             leading: Icon(Symbols.lock_rounded),
@@ -83,6 +94,15 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+String _backText(GlassesLink link) {
+  final back = link.backCam;
+  if (back == null) return 'Not found';
+  final s = link.backStatus;
+  if (s == null) return '$back · no FPGA report (it has to send them to this phone)';
+  final what = s.collision ? 'collision' : s.turning ? 'head turning' : s.tracking ? 'tracking' : 'clear';
+  return '$back · ${s.fpga ? 'FPGA $what' : 'FPGA not answering'}${s.imu ? '' : ' · no gyro'}';
 }
 
 class _Header extends StatelessWidget {
@@ -187,6 +207,76 @@ class _TogetherSettings extends StatelessWidget {
             },
           ),
       ],
+    );
+  }
+}
+
+/// The eye camera, where its tracking runs, and gaze calibration.
+class _EyeCameraTile extends StatelessWidget {
+  const _EyeCameraTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final board = context.watch<GlassesLink>().eyeCam;
+    PhoneEyes? eyes;
+    try {
+      eyes = context.watch<PhoneEyes>();
+    } on ProviderNotFoundException {
+      eyes = null;
+    }
+    final onPhone = watchBackend(context)?.onPhone ?? true;
+    final step = eyes?.gaze.calibrationStep;
+    final String detail;
+    if (board == null) {
+      detail = 'Not found';
+    } else if (!onPhone) {
+      detail = '${board.video} · eye tracking runs on the laptop';
+    } else if (step != null) {
+      detail = '${gazePrompt(step)}…';
+    } else {
+      detail = '${board.video} · tracked on this phone · gaze ${eyes?.gaze.calibrated == true ? 'calibrated' : 'not calibrated'}';
+    }
+    return ListTile(
+      leading: const Icon(Symbols.visibility_rounded),
+      title: const Text('Eye camera'),
+      subtitle: Text(detail),
+      trailing: board != null && onPhone && eyes != null && step == null
+          ? TextButton(onPressed: eyes.calibrateGaze, child: const Text('Calibrate gaze'))
+          : null,
+    );
+  }
+}
+
+/// Which voice speaks, and how to get a more natural one.
+class _VoiceTile extends StatelessWidget {
+  const _VoiceTile();
+
+  @override
+  Widget build(BuildContext context) {
+    Voice? voice;
+    try {
+      voice = context.read<Voice?>();
+    } on ProviderNotFoundException {
+      voice = null;
+    }
+    if (voice is! TtsVoice) return const SizedBox.shrink();
+    return FutureBuilder<TtsVoiceInfo?>(
+      future: voice.chosenVoice(),
+      builder: (context, snap) {
+        final v = snap.data;
+        final text = snap.connectionState != ConnectionState.done
+            ? 'Checking…'
+            : v == null
+            ? 'System default. $betterVoiceHint'
+            : v.natural
+            ? '$v'
+            : '$v (basic). $betterVoiceHint';
+        return ListTile(
+          leading: const Icon(Symbols.record_voice_over_rounded),
+          title: const Text('Voice'),
+          subtitle: Text(text),
+        );
+      },
     );
   }
 }

@@ -40,6 +40,23 @@ UDP 4300 is also where the backend listens for the FPGA's binary rear-event pack
 `tools/rear_udp_viewer.py` cannot listen on 4300 while the backend is running on the same laptop.
 Both sketches compile with arduino-cli and esp32 core 3.3.12 (`esp32:esp32:esp32cam`).
 
+## The phone app (no laptop)
+
+The phone app reads the boards directly over the phone's hotspot (see `mobile-app/README.md`,
+"The real camera boards"). An iPhone app doesn't receive UDP broadcasts, so:
+
+- eye and front: in `secrets.h`, `#define BACKEND_HOST "172.20.10.1"` (the phone's own address on
+  its hotspot). The laptop still gets the broadcast hello.
+- back camera: its status and `{"t":"collision"}` only go to `WiFi.broadcastIP()`. For the phone they
+  also have to go to each viewer (the app pokes the board on 4300 every 2 s, so it is one) or to
+  172.20.10.1. `mobile-app/test/firmware_contract_test.dart` shows this as a skipped test until then.
+
+Eye tracking, near-work, outside time and the rings run in the app too (`mobile-app/lib/eyes/`),
+so with these the glasses need only the phone (and the cloud server for Muse, captions,
+Together and calls).
+
+`python tools/fake_udp_camera.py --phone 172.20.10.1` plays all three boards for the app.
+
 ## One-time setup (Arduino IDE 2)
 
 1. Settings > Additional boards manager URLs:

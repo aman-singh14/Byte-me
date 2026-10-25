@@ -68,19 +68,42 @@ class MjpegParser {
 
 enum CameraState { idle, connecting, streaming, retrying }
 
+/// A live camera: MJPEG over HTTP ([RearCamera]), or JPEG chunks over UDP
+/// from the boards (udp_camera.dart). Frames are kept newest-only, never stored.
+abstract class CameraFeed {
+  /// The newest JPEG frame, or null while there's none.
+  ValueNotifier<Uint8List?> get frame;
+  ValueNotifier<CameraState> get state;
+
+  /// Frames per second over the last second.
+  ValueNotifier<int> get fps;
+
+  /// Where the frames come from, for Settings and to tell feeds apart.
+  String get source;
+
+  void start();
+  void dispose();
+}
+
 /// Pulls the rear camera's MJPEG stream and keeps the newest frame.
 /// Reconnects by itself when the stream drops.
-class RearCamera {
+class RearCamera implements CameraFeed {
   RearCamera(this.url, {this.retryDelay = const Duration(seconds: 1)});
 
   final Uri url;
   final Duration retryDelay;
 
+  @override
+  String get source => url.toString();
+
   /// The newest JPEG frame. Replaced (not queued) as frames arrive.
+  @override
   final frame = ValueNotifier<Uint8List?>(null);
+  @override
   final state = ValueNotifier<CameraState>(CameraState.idle);
 
   /// Frames per second over the last second.
+  @override
   final fps = ValueNotifier<int>(0);
 
   HttpClient? _client;
@@ -90,6 +113,7 @@ class RearCamera {
   int _framesThisSecond = 0;
   bool _running = false;
 
+  @override
   void start() {
     if (_running) return;
     _running = true;
@@ -156,6 +180,7 @@ class RearCamera {
     state.value = CameraState.idle;
   }
 
+  @override
   void dispose() {
     stop();
     frame.dispose();

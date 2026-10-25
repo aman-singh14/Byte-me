@@ -2,11 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
+import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:speech_to_text/speech_to_text.dart';
 
 import '../alerts/voice.dart';
+import '../eyes/gaze.dart' show regionColumns;
 import '../net/backend_link.dart';
 import '../net/backend_models.dart';
+import '../net/glasses_link.dart' show CameraBoard;
+import '../vision/phone_camera.dart';
+import 'vlm.dart';
 
 abstract class QuestionSpeech {
   Future<bool> initialize({required void Function(String) status, required void Function(String) error});
@@ -43,10 +49,89 @@ class DeviceQuestionSpeech implements QuestionSpeech {
   Future<void> cancel() => _speech.cancel();
 }
 
+/// Ask without the laptop: one photo goes to Muse with the question (through
+/// the cloud server, or the laptop's /vlm). The photo is a still from the
+/// glasses' front camera when its board is on the hotspot (cropped to where
+/// the wearer is looking, when the eye camera knows), else from the phone's
+/// back camera, which runs only while the button is held and the answer
+/// comes back.
+class PhoneLook {
+  PhoneLook({required this.camera, required this.vlm, this.glassesFront, this.gaze, http.Client? client})
+    : _http = client ?? http.Client();
+
+  final PhoneCamera camera;
+  final VlmService vlm;
+
+  /// The front camera board, if it said hello.
+  final CameraBoard? Function()? glassesFront;
+
+  /// Where the wearer is looking (left / center / right), or null when unknown.
+  final String? Function()? gaze;
+  final http.Client _http;
+  bool _cameraOn = false;
+
+  /// The photo comes from the glasses' front camera, not the phone's.
+  bool get fromGlasses => glassesFront?.call() != null;
+
+  void warmUp() {
+    if (fromGlasses || _cameraOn) return;
+    _cameraOn = true;
+    unawaited(camera.start());
+  }
+
+  void coolDown() {
+    if (!_cameraOn) return;
+    _cameraOn = false;
+    unawaited(camera.stop());
+  }
+
+  Future<LookResult> ask(String question) async {
+    final board = glassesFront?.call();
+    final region = board == null ? null : gaze?.call();
+    final VlmImage image;
+    if (board != null) {
+      final still = await _still(board);
+      image = VlmImage.front(region == null ? still : await compute(_cropColumns, (still, region)));
+    } else {
+      final jpeg = await camera.next();
+      if (jpeg == null) throw VlmUnavailable(camera.error ?? "Couldn't get a picture from your phone camera.");
+      image = VlmImage.phone(jpeg);
+    }
+    final r = await vlm.ask(VlmFeature.ask, images: [image], question: question);
+    final answer = r['answer'];
+    return LookResult(
+      region: region ?? 'all',
+      regionSource: region == null ? 'phone' : 'gaze',
+      museAnswer: answer is String && answer.trim().isNotEmpty ? answer.trim() : null,
+    );
+  }
+
+  /// One 640x480 still from the front camera board (HTTP /capture).
+  Future<List<int>> _still(CameraBoard board) async {
+    try {
+      final r = await _http.get(board.capture()).timeout(const Duration(seconds: 4));
+      if (r.statusCode == 200 && r.bodyBytes.length > 2) return r.bodyBytes;
+    } catch (e) {
+      debugPrint('PhoneLook: front still: $e');
+    }
+    throw const VlmUnavailable("Couldn't get a picture from the glasses' front camera.");
+  }
+}
+
+/// The [regionColumns] part of a JPEG, as a JPEG (the whole picture if it doesn't decode).
+List<int> _cropColumns((List<int>, String) job) {
+  final (jpeg, region) = job;
+  final im = img.decodeJpg(Uint8List.fromList(jpeg));
+  final cols = regionColumns[region];
+  if (im == null || cols == null) return jpeg;
+  final x0 = (cols.$1 * im.width).round(), x1 = (cols.$2 * im.width).round();
+  return img.encodeJpg(img.copyCrop(im, x: x0, y: 0, width: x1 - x0, height: im.height), quality: 85);
+}
+
 /// Press-and-hold voice questions. The microphone is on only while the button
 /// is held; letting go sends what was heard, once.
 class VoiceQuestions extends ChangeNotifier {
-  VoiceQuestions({required this.backend, this.voice, QuestionSpeech? speech, bool watchLifecycle = true})
+  VoiceQuestions({required this.backend, this.voice, this.phone, QuestionSpeech? speech, bool watchLifecycle = true})
     : speech = speech ?? DeviceQuestionSpeech() {
     if (watchLifecycle) {
       // Leaving the app (or the permission prompt) drops a held question.
@@ -64,7 +149,11 @@ class VoiceQuestions extends ChangeNotifier {
 
   final BackendLink backend;
   final Voice? voice;
+
+  /// Used while the laptop isn't connected. Null: Ask needs the laptop.
+  final PhoneLook? phone;
   final QuestionSpeech speech;
+  bool _phoneOn = false;
   AppLifecycleListener? _lifecycle;
   Completer<void>? _lastWords;
   bool _ready = false, _disposed = false, _retried = false, _failed = false;
@@ -82,6 +171,25 @@ class VoiceQuestions extends ChangeNotifier {
   String? question, error;
   LookResult? answer;
 
+  /// The next question goes with a photo straight to Muse: there's no laptop (the phone
+  /// runs everything) or it isn't answering.
+  bool get usesPhone => phone != null && (backend.onPhone || backend.status != BackendStatus.connected);
+
+  /// That photo comes from the glasses' front camera rather than the phone's.
+  bool get photoFromGlasses => phone?.fromGlasses == true;
+
+  void _warmPhone() {
+    if (_phoneOn || !usesPhone) return;
+    _phoneOn = true;
+    phone!.warmUp();
+  }
+
+  void _coolPhone() {
+    if (!_phoneOn) return;
+    _phoneOn = false;
+    phone!.coolDown();
+  }
+
   /// Button pressed: start listening.
   Future<void> hold() async {
     if (_disposed || holding || busy) return;
@@ -91,6 +199,7 @@ class VoiceQuestions extends ChangeNotifier {
     _failed = false;
     transcript = '';
     error = null;
+    _warmPhone(); // a picture is ready by the time they let go
     _notify();
     if (!_ready) {
       try {
@@ -121,6 +230,7 @@ class VoiceQuestions extends ChangeNotifier {
     listening = false;
     final words = transcript.trim();
     if (words.isEmpty) {
+      _coolPhone();
       error = _failed ? notStarted : notHeard;
       _notify();
       return;
@@ -135,6 +245,7 @@ class VoiceQuestions extends ChangeNotifier {
     holding = false;
     listening = false;
     transcript = '';
+    _coolPhone();
     unawaited(speech.cancel());
     _notify();
   }
@@ -146,7 +257,7 @@ class VoiceQuestions extends ChangeNotifier {
       await speech.listen((words, finalResult) {
         if (_disposed || session != _session) return;
         transcript = words;
-        if (finalResult) _lastWords?.complete();
+        if (finalResult && !(_lastWords?.isCompleted ?? true)) _lastWords!.complete();
         _notify();
       });
     } catch (_) {
@@ -195,6 +306,7 @@ class VoiceQuestions extends ChangeNotifier {
 
   void _stopHolding(String message) {
     _session++;
+    _coolPhone();
     holding = false;
     listening = false;
     error = message;
@@ -211,7 +323,7 @@ class VoiceQuestions extends ChangeNotifier {
     _notify();
     try {
       await speech.cancel(); // the microphone is off before network work or speaking
-      final response = await backend.look(question: words, requireGaze: true);
+      final response = _phoneOn ? await phone!.ask(words) : await backend.look(question: words, requireGaze: true);
       if (_disposed || session != _session) return;
       answer = response;
       _notify();
@@ -223,6 +335,7 @@ class VoiceQuestions extends ChangeNotifier {
         await voice?.say(error!, interrupt: true);
       }
     } finally {
+      _coolPhone();
       busy = false;
       _notify();
     }
@@ -237,6 +350,7 @@ class VoiceQuestions extends ChangeNotifier {
     _disposed = true;
     _session++;
     _lifecycle?.dispose();
+    _coolPhone();
     unawaited(speech.cancel());
     super.dispose();
   }

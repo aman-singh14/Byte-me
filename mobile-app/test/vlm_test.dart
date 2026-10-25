@@ -17,8 +17,8 @@ void main() {
     flags: flags ?? FeatureFlags(),
     clock: () => now,
     minInterval: minInterval,
-    call: (feature, {images = const [], useFront = false, timeout}) {
-      calls.add('$feature ${[for (final i in images) i.$1]} front=$useFront');
+    call: (feature, {images = const [], useFront = false, question, timeout}) {
+      calls.add('$feature ${[for (final i in images) i.$1]} front=$useFront${question == null ? '' : ' "$question"'}');
       return reply();
     },
   );

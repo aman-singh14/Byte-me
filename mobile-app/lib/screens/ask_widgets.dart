@@ -16,7 +16,10 @@ class AskCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final questions = context.watch<VoiceQuestions?>();
     final backend = watchBackend(context);
-    final problem = backendProblem(backend);
+    // Without the laptop, a phone camera photo goes with the question instead.
+    final phone = questions?.usesPhone == true;
+    final glasses = questions?.photoFromGlasses == true;
+    final problem = phone ? null : backendProblem(backend);
     final space = context.space;
     final answer = questions?.answer;
     final holding = questions?.holding == true;
@@ -26,7 +29,11 @@ class AskCard extends StatelessWidget {
         : busy
         ? 'Answering…'
         : holding
-        ? 'Listening…'
+        ? (phone && !glasses ? 'Listening… point your phone at it.' : 'Listening…')
+        : phone && !glasses
+        ? "Hold the button, point your phone's camera at what you're asking about, and ask out loud."
+        : phone
+        ? "Hold the button, look at what you're asking about, and ask out loud."
         : 'Hold the button and ask anything out loud.';
     final prompt = holding ? questions?.transcript : questions?.question;
     return OmniCard(
@@ -36,6 +43,27 @@ class AskCard extends StatelessWidget {
           const CardTitle(icon: Symbols.mic_rounded, title: 'Ask your glasses'),
           SizedBox(height: space.s),
           Text(status, style: context.type.body),
+          if (phone) ...[
+            SizedBox(height: space.s),
+            Row(
+              children: [
+                ExcludeSemantics(
+                  child: Icon(
+                    glasses ? Symbols.eyeglasses_rounded : Symbols.smartphone_rounded,
+                    size: 20,
+                    color: context.colors.textSecondary,
+                  ),
+                ),
+                SizedBox(width: space.s),
+                Expanded(
+                  child: Text(
+                    '${glasses ? 'Glasses camera' : 'Phone camera'} · your question and one photo go to Meta',
+                    style: context.type.caption.copyWith(color: context.colors.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (prompt != null && prompt.isNotEmpty) ...[
             SizedBox(height: space.m),
             Text('“$prompt”', style: context.type.body),

@@ -24,25 +24,32 @@ enum VlmFeature {
   socialConfirm('social_confirm', 'Social tap check'),
 
   /// One sentence about a snapshot, for the speed check. {"summary": string}
-  describe('describe', 'Describe');
+  describe('describe', 'Describe'),
+
+  /// The wearer's spoken question about a phone camera photo, when the laptop
+  /// isn't there. {"answer": string}
+  ask('ask', 'Ask');
 
   const VlmFeature(this.wire, this.title);
   final String wire;
   final String title;
 
-  /// How long a feature waits before it falls back.
-  Duration get timeout => const Duration(seconds: 4);
+  /// How long a feature waits before it falls back. Ask's bigger photo and
+  /// open question take longer, and someone is waiting for the answer anyway.
+  Duration get timeout => Duration(seconds: this == ask ? 8 : 4);
 }
 
 /// Canned answers for mock mode.
 const vlmMockAnswers = <VlmFeature, Map<String, Object>>{
   VlmFeature.socialConfirm: {'engaging': true, 'action': 'waving'},
   VlmFeature.describe: {'summary': 'A hallway with a door on the left. This is a mock answer.'},
+  VlmFeature.ask: {'answer': 'A desk with a laptop on it. This is a mock answer.'},
 };
 
 class VlmImage {
   const VlmImage.rear(this.jpeg) : camera = 'rear';
   const VlmImage.front(this.jpeg) : camera = 'front';
+  const VlmImage.phone(this.jpeg) : camera = 'phone';
   final String camera;
   final List<int> jpeg;
 }
@@ -83,6 +90,7 @@ typedef VlmCall =
       String feature, {
       List<(String, List<int>)> images,
       bool useFront,
+      String? question,
       Duration? timeout,
     });
 
@@ -116,7 +124,13 @@ class VlmService extends ChangeNotifier {
   bool get mock => flags[Feature.vlmMock];
 
   /// The feature's JSON answer. Throws [VlmUnavailable].
-  Future<Map<String, dynamic>> ask(VlmFeature feature, {List<VlmImage> images = const [], bool useFront = false}) {
+  /// [question]: the wearer's words, for [VlmFeature.ask].
+  Future<Map<String, dynamic>> ask(
+    VlmFeature feature, {
+    List<VlmImage> images = const [],
+    bool useFront = false,
+    String? question,
+  }) {
     final running = _running[feature];
     if (running != null) return running;
     final now = _clock(), last = _lastStart[feature];
@@ -125,13 +139,13 @@ class VlmService extends ChangeNotifier {
     }
     _lastStart[feature] = now;
     // A block body: returning the removed future would make it wait on itself.
-    final future = _run(feature, images, useFront).whenComplete(() {
+    final future = _run(feature, images, useFront, question).whenComplete(() {
       _running.remove(feature);
     });
     return _running[feature] = future;
   }
 
-  Future<Map<String, dynamic>> _run(VlmFeature feature, List<VlmImage> images, bool useFront) async {
+  Future<Map<String, dynamic>> _run(VlmFeature feature, List<VlmImage> images, bool useFront, String? question) async {
     final watch = Stopwatch()..start();
     try {
       final Map<String, dynamic> answer;
@@ -143,6 +157,7 @@ class VlmService extends ChangeNotifier {
           feature.wire,
           images: [for (final i in images) (i.camera, i.jpeg)],
           useFront: useFront,
+          question: question,
           timeout: feature.timeout + const Duration(seconds: 1),
         ).timeout(feature.timeout);
       }

@@ -138,7 +138,7 @@ void main() {
       final vlm = VlmService(
         flags: flags,
         minInterval: Duration.zero,
-        call: (feature, {images = const [], useFront = false, timeout}) async {
+        call: (feature, {images = const [], useFront = false, question, timeout}) async {
           vlmCalls++;
           expect((feature, images.single.$1), ('social_confirm', 'rear'));
           if (hang != null) await hang!.future;

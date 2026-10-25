@@ -8,5 +8,6 @@ RUN pip install --no-cache-dir -r cloud/requirements.txt
 COPY . .
 ENV DATA_DIR=/data
 EXPOSE 8080
-# No access log: helper URLs carry room tokens.
-CMD ["uvicorn", "cloud.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Warnings only, no access log: helper URLs carry room tokens, and uvicorn logs
+# every WebSocket URL at "info".
+CMD ["uvicorn", "cloud.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--log-level", "warning", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]

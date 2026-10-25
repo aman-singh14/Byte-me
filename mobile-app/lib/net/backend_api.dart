@@ -114,6 +114,7 @@ class BackendApi {
     String feature, {
     List<(String, List<int>)> images = const [],
     bool useFront = false,
+    String? question,
     Duration? timeout,
   }) async {
     final j = await transport.request(
@@ -122,6 +123,7 @@ class BackendApi {
       body: {
         'images': [for (final (camera, jpeg) in images) {'camera': camera, 'jpeg': base64Encode(jpeg)}],
         'use_front': useFront,
+        'question': ?question,
       },
       timeout: timeout,
     );

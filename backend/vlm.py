@@ -1,6 +1,7 @@
 """One VLM service for every snapshot feature in the app (Muse Spark through MuseClient).
 
-    POST /vlm/{feature}   {"images": [{"camera": "rear"|"front", "jpeg": "<base64>"}], "use_front": false}
+    POST /vlm/{feature}   {"images": [{"camera": "rear"|"front"|"phone", "jpeg": "<base64>"}], "use_front": false,
+                           "question": "..." (ask only)}
                           -> {"feature", "result": {...}, "latency_s", "model"}
 
 Each feature has its own prompt, JSON schema (structured output) and timeout (4 s
@@ -32,6 +33,7 @@ SYSTEM_PROMPT = (
 )
 
 MAX_IMAGE_BYTES = 2_000_000
+MAX_QUESTION_CHARS = 300
 
 # Hidden reasoning counts toward max_tokens, even at minimal effort: a yes/no
 # about a person used ~300 before answering. This leaves room for the answer.
@@ -63,6 +65,17 @@ FEATURES = {
         "schema": _schema({"summary": {"type": "string"}}),
         "timeout_s": 4.0,
         "cameras": ("rear", "front"),
+    },
+    # Ask without the laptop: the wearer's spoken question about one photo (glasses front camera, or phone).
+    "ask": {
+        "prompt": ("This photo is from the camera the wearer is pointing at what they are asking about: their "
+                   "glasses' front camera, or their phone camera when the glasses aren't connected (the image "
+                   "list says which). Answer their question from the photo in one or two short sentences. "
+                   "answer: that reply."),
+        "schema": _schema({"answer": {"type": "string"}}),
+        "timeout_s": 8.0,
+        "cameras": ("phone", "front"),
+        "question": True,
     },
 }
 
@@ -122,11 +135,15 @@ class VlmService:
         self.muse = muse
         self.front_frame = front_frame      # callable -> newest FRONT frame (BGR) or None
 
-    def run(self, feature, images=(), use_front=False):
-        """images: [(camera, base64 JPEG)]. Raises VlmError (bad request) or MuseUnavailable."""
+    def run(self, feature, images=(), use_front=False, question=None):
+        """images: [(camera, base64 JPEG)]; question: the wearer's words (ask only).
+        Raises VlmError (bad request) or MuseUnavailable."""
         spec = FEATURES.get(feature)
         if spec is None:
             raise VlmError(f"unknown feature {feature!r}")
+        asked = (question or "").strip()[:MAX_QUESTION_CHARS] if spec.get("question") else ""
+        if spec.get("question") and not asked:
+            raise VlmError(f"{feature} needs a question")
         named = []
         for camera, b64 in images:
             if camera not in spec["cameras"]:
@@ -140,8 +157,9 @@ class VlmService:
         if not named:
             raise VlmError("send at least one image")
         order = "; ".join(f"image {i + 1}: {cam} camera" for i, (cam, _) in enumerate(named))
+        context = f"Images: {order}." + (f'\nThe wearer asked: "{asked}"' if asked else "")
         r = self.muse.ask(spec["prompt"], images=[img for _, img in named], purpose=f"vlm_{feature}",
-                          context=f"Images: {order}.", system=SYSTEM_PROMPT, schema=spec["schema"],
+                          context=context, system=SYSTEM_PROMPT, schema=spec["schema"],
                           timeout_s=spec["timeout_s"], max_tokens=MAX_TOKENS)
         return {"feature": feature, "result": parse_answer(r.text, spec["schema"]),
                 "latency_s": round(r.latency_s, 3), "model": r.model}

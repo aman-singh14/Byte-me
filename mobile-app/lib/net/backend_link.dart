@@ -1,13 +1,15 @@
-// Polls the laptop backend for eye, close-up and ring data.
+// Eye, close-up and ring data, from the laptop backend or the phone itself.
 //
-// Address: the one typed in Settings, or else the laptop the glasses' UDP hello came
-// from (GlassesLink.frame, the backend plays that device) on port 8001.
+// Laptop: the address typed in Settings, or else the laptop the glasses' UDP hello
+// came from (GlassesLink.frame, the backend plays that device) on port 8001.
+// With neither, the phone measures it itself from the camera boards (PhoneEyes).
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../eyes/phone_eyes.dart';
 import 'backend_api.dart';
 import 'backend_models.dart';
 import 'glasses_link.dart';
@@ -72,6 +74,7 @@ class BackendLink extends ChangeNotifier {
   BackendLink({
     SettingsStore? store,
     ApiFactory? apiFactory,
+    this.phone,
     this.liveEvery = const Duration(seconds: 2),
     this.slowEvery = const Duration(seconds: 20),
   }) : _store = store ?? PrefsSettingsStore(),
@@ -79,6 +82,9 @@ class BackendLink extends ChangeNotifier {
 
   final SettingsStore _store;
   final ApiFactory _apiFactory;
+
+  /// Measures everything on the phone while no laptop is set. Null: laptop only.
+  final PhoneEyes? phone;
   final Duration liveEvery;
   final Duration slowEvery;
 
@@ -101,8 +107,11 @@ class BackendLink extends ChangeNotifier {
   RingsDay? rings;
   List<RingsDay> ringsHistory = const [];
 
-  /// The address in use, if any.
+  /// The laptop address in use, if any.
   Uri? get baseUrl => _manual ?? _auto;
+
+  /// The data comes from the phone itself, not a laptop.
+  bool get onPhone => _api is PhoneApi;
   Uri? get manualUrl => _manual;
   Uri? get discoveredUrl => _auto;
 
@@ -130,10 +139,12 @@ class BackendLink extends ChangeNotifier {
 
   void _useBase() {
     final base = baseUrl;
-    final changed = base?.toString() != _api?.base.toString();
-    if (!changed) return;
-    _api = base == null ? null : _apiFactory(base);
-    _set(base == null ? BackendStatus.notConfigured : BackendStatus.connecting);
+    final phone = this.phone;
+    final next = base != null ? base.toString() : (phone != null ? 'phone' : null);
+    final now = _api == null ? null : (onPhone ? 'phone' : _api!.base.toString());
+    if (next == now) return;
+    _api = base != null ? _apiFactory(base) : (phone != null ? PhoneApi(phone) : null);
+    _set(_api == null ? BackendStatus.notConfigured : BackendStatus.connecting);
     if (_api != null) refreshAll();
   }
 
@@ -212,11 +223,12 @@ class BackendLink extends ChangeNotifier {
     String feature, {
     List<(String, List<int>)> images = const [],
     bool useFront = false,
+    String? question,
     Duration? timeout,
   }) async {
     final api = _api;
     if (api == null) throw const BackendException('Set the laptop address in Settings first.');
-    return api.vlm(feature, images: images, useFront: useFront, timeout: timeout);
+    return api.vlm(feature, images: images, useFront: useFront, question: question, timeout: timeout);
   }
 
   /// Dev mode only. Returns an error message, or null.

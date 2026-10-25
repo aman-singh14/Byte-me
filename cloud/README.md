@@ -8,7 +8,7 @@ at one HTTPS address. With it, the app works on cellular or any Wi-Fi, with no l
 | Together | `/v1/...`, `/t/{id}`, `/healthz` | `social/app.py` |
 | Call a helper | `/rooms`, `/h/{room}`, `/ws/wearer/{room}`, `/ws/helper/{room}`, `/livekit-token` | `backend/helper.py` |
 | Live captions | `WS /ws/captions` | `backend/captions.py` |
-| Muse image questions | `POST /vlm/{feature}` | `backend/vlm.py` |
+| Muse image questions (social-tap check, describe, Ask with a phone photo) | `POST /vlm/{feature}` | `backend/vlm.py` |
 
 The laptop backend (`backend/main.py`) still does everything that needs the glasses'
 cameras: eye tracking, near-work, rings, rear events and "Ask".
@@ -21,14 +21,14 @@ the app or the image (`.dockerignore` leaves `.env` out).
 - **Captions:** `CAPTIONS_DAILY_MINUTES`, default 120 a day (about $0.36), plus 4 sessions at once. The count is kept in memory, so a restart starts it over.
 - **Helper rooms:** they cost nothing here. LiveKit counts call minutes against its own free allowance.
 
-**Privacy:** nothing new is stored. Together keeps what it always did. Frames, audio and captions only pass through. Access logs are off, because helper links carry room tokens.
+**Privacy:** nothing new is stored. Together keeps what it always did. Frames, audio and captions only pass through. Logs are warnings only, because helper links carry room tokens and uvicorn's normal logs include every URL.
 
 ## Run it locally
 
 From the repo root (the backend's `.venv` has everything it needs):
 
 ```bash
-.venv/bin/uvicorn cloud.app:create_app --factory --port 8080
+.venv/bin/uvicorn cloud.app:create_app --factory --host 0.0.0.0 --port 8080 --log-level warning
 ```
 
 Data goes to `./data`; set `DATA_DIR` to change it. Tests:

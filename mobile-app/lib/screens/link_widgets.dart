@@ -43,7 +43,7 @@ class _LiveStatusStripState extends State<LiveStatusStrip> {
     }
     if (widget.bannerOnly && link.status == LinkStatus.connected) return const SizedBox.shrink();
 
-    final last = link.lastSensAt;
+    final last = link.lastHeardAt;
     return StatusStrip(
       status: link.status,
       batteryPercent: link.batteryPercent,

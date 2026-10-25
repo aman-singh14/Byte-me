@@ -43,9 +43,9 @@ async function join() {
   const ws = Socket.all[0]; act(() => ws.onopen()); ws.message({ t: 'wearer', on: true });
   return ws;
 }
-function frame() {
+function frame(camera = 'F') {
   const buffer = new ArrayBuffer(13), bytes = new Uint8Array(buffer);
-  bytes[0] = 70; new DataView(buffer).setBigUint64(1, BigInt(Date.now())); bytes.set([255, 216, 255, 217], 9);
+  bytes[0] = camera.charCodeAt(0); new DataView(buffer).setBigUint64(1, BigInt(Date.now())); bytes.set([255, 216, 255, 217], 9);
   return buffer;
 }
 test('consent gates connection; stale video gates guidance, but Stop works', async () => {
@@ -76,6 +76,14 @@ test('camera changes, readable alerts, and ending release the video and stop rec
   expect(screen.getByText('This call has ended')).toBeTruthy();
   expect(screen.queryByRole('img')).toBeNull();
   act(() => ws.onclose({ code: 1006 })); expect(Socket.all).toHaveLength(1);
+});
+test("without glasses the view says it's the phone camera and hides the camera switch", async () => {
+  const ws = await join(); ws.message(frame('P'));
+  expect(screen.getByText('Phone camera')).toBeTruthy();
+  expect(screen.getByRole('img').getAttribute('alt')).toBe("Live view from the wearer's phone camera");
+  expect(screen.queryByRole('button', { name: 'Rear' })).toBeNull();
+  ws.message({ t: 'status', camera: 'F', video: 'waiting' });
+  expect(screen.getByRole('button', { name: 'Rear' })).toBeTruthy();
 });
 test('network loss reconnects; occupied or expired rooms do not', async () => {
   const ws = await join(); vi.useFakeTimers();

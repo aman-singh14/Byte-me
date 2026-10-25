@@ -38,7 +38,7 @@ class Detection {
 abstract class ObjectDetector {
   Future<void> load();
 
-  /// Detects [alertClasses] in one JPEG frame.
+  /// Detects the classes it looks for ([alertClasses] unless told otherwise) in one JPEG frame.
   Future<List<Detection>> detect(Uint8List jpeg);
 
   void dispose() {}
@@ -48,9 +48,12 @@ abstract class ObjectDetector {
 /// Android). Uses the bundled 320 px export from tool/export_yolo.py, and
 /// falls back to the plugin's official 640 px model if it is missing.
 class YoloDetector implements ObjectDetector {
-  YoloDetector({this.confidenceThreshold = 0.35});
+  YoloDetector({this.confidenceThreshold = 0.35, this.classes = alertClasses});
 
   final double confidenceThreshold;
+
+  /// The COCO classes to keep: [alertClasses] for the rear camera.
+  final Set<String> classes;
   YOLO? _yolo;
 
   /// Which model actually loaded, for the debug readout.
@@ -83,7 +86,7 @@ class YoloDetector implements ObjectDetector {
     if (raw is! List) return const [];
     return [
       for (final d in raw)
-        if (d is Map) ...parseDetection(YOLOResult.fromMap(d)),
+        if (d is Map) ...parseDetection(YOLOResult.fromMap(d), classes),
     ];
   }
 
@@ -91,10 +94,10 @@ class YoloDetector implements ObjectDetector {
   void dispose() => _yolo?.dispose();
 }
 
-/// Keeps a plugin result if it is one of [alertClasses].
+/// Keeps a plugin result if it is one of [classes].
 @visibleForTesting
-List<Detection> parseDetection(YOLOResult r) {
+List<Detection> parseDetection(YOLOResult r, [Set<String> classes = alertClasses]) {
   final label = r.className.toLowerCase();
-  if (!alertClasses.contains(label)) return const [];
+  if (!classes.contains(label)) return const [];
   return [Detection(label: label, confidence: r.confidence, box: r.normalizedBox)];
 }

@@ -105,6 +105,7 @@ class VlmImage(BaseModel):
 
 class VlmRequest(BaseModel):
     images: list[VlmImage] = []
+    question: str | None = None
 
 
 def create_app(data_dir=None, make_upstream=captions.meta_upstream, muse=None):
@@ -129,7 +130,8 @@ def create_app(data_dir=None, make_upstream=captions.meta_upstream, muse=None):
     @app.post("/vlm/{feature}")
     def run_vlm(feature: str, body: VlmRequest | None = None):
         try:
-            return vlm.run(feature, [(i.camera, i.jpeg) for i in (body or VlmRequest()).images])
+            body = body or VlmRequest()
+            return vlm.run(feature, [(i.camera, i.jpeg) for i in body.images], question=body.question)
         except VlmError as e:
             raise HTTPException(400, str(e)) from e
         except MuseUnavailable as e:

@@ -19,7 +19,8 @@ Audio goes through LiveKit Cloud, not this server: each side asks for a token he
 in the environment or the repo's .env. Without them calls work with video and
 buzzes only. LiveKit doesn't record unless asked to, and we never ask.
 
-Wearer -> server, binary: 1 byte camera ('F' front, 'R' rear) + 8-byte big-endian
+Wearer -> server, binary: 1 byte camera ('F' front, 'R' rear, 'P' the phone's own camera
+while no glasses camera is connected) + 8-byte big-endian
 timestamp (ms since epoch) + the JPEG, forwarded byte for byte. The server
 answers each frame with {"t":"ack"} so the app keeps at most a couple of frames
 in flight. JSON: {"t":"alert",...}, {"t":"tap",...}, {"t":"status",...},
@@ -52,7 +53,7 @@ from pydantic import BaseModel, Field
 ROOM_TTL_S = 30 * 60
 MAX_FRAME_BYTES = 1024 * 1024
 HEADER_BYTES = 9  # camera id + timestamp
-CAMERAS = (b"F", b"R")
+CAMERAS = (b"F", b"R", b"P")  # glasses front, glasses rear, the phone's own camera (no glasses)
 GUIDE_DIRS = ("L", "R", "fwd", "stop")
 
 # WebSocket close codes (4000-4999 are ours).

@@ -35,8 +35,11 @@ class Silent(captions.CannedUpstream):
 
 
 class FakeMuse:
+    context = None
+
     def ask(self, question, **kw):
-        return SimpleNamespace(text='{"summary": "A desk."}', latency_s=0.1, model="fake")
+        self.context = kw.get("context")
+        return SimpleNamespace(text='{"summary": "A desk.", "answer": "A desk."}', latency_s=0.1, model="fake")
 
 
 def jpeg_b64():
@@ -48,8 +51,9 @@ class CloudTest(unittest.TestCase):
     def client(self, minutes="120"):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.muse = FakeMuse()
         with mock.patch.dict(os.environ, {"CAPTIONS_DAILY_MINUTES": minutes}):
-            return TestClient(create_app(tmp.name, make_upstream=Silent, muse=FakeMuse()))
+            return TestClient(create_app(tmp.name, make_upstream=Silent, muse=self.muse))
 
     def test_together_and_helper_share_the_address(self):
         c = self.client()
@@ -62,8 +66,11 @@ class CloudTest(unittest.TestCase):
     def test_vlm_answers_from_the_images_sent(self):
         c = self.client()
         r = c.post("/vlm/describe", json={"images": [{"camera": "rear", "jpeg": jpeg_b64()}]})
-        self.assertEqual(r.json()["result"], {"summary": "A desk."})
+        self.assertEqual(r.json()["result"]["summary"], "A desk.")
         self.assertEqual(c.post("/vlm/describe", json={"images": []}).status_code, 400)
+        r = c.post("/vlm/ask", json={"images": [{"camera": "phone", "jpeg": jpeg_b64()}], "question": "What is this?"})
+        self.assertEqual(r.json()["result"]["answer"], "A desk.")
+        self.assertIn('The wearer asked: "What is this?"', self.muse.context)
 
     def test_captions_stop_at_the_daily_limit(self):
         c = self.client(minutes="0.001")                # 0.06 s of 16 kHz audio

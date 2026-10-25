@@ -54,6 +54,20 @@ class VlmTest(unittest.TestCase):
         self.assertEqual(sum(p["type"] == "image_url" for p in parts), 2)
         self.assertIn("image 1: rear camera; image 2: front camera", parts[0]["text"])
 
+    def test_ask_sends_the_question_with_the_phone_photo(self):
+        vlm, t = service('{"answer": "A red mug."}')
+        out = vlm.run("ask", [("phone", jpeg_b64())], question="  What color is this mug? ")
+        self.assertEqual(out["result"], {"answer": "A red mug."})
+        body, timeout = t.calls[0]
+        self.assertEqual(timeout, 8.0)
+        text = body["messages"][1]["content"][0]["text"]
+        self.assertIn("phone camera", text)
+        self.assertIn('The wearer asked: "What color is this mug?"', text)
+        vlm.run("ask", [("front", jpeg_b64())], question="And this?")  # the glasses' front camera works too
+        for images, question in (([("phone", jpeg_b64())], " "), ([("rear", jpeg_b64())], "What is it?")):
+            with self.assertRaises(VlmError):
+                vlm.run("ask", images, question=question)
+
     def test_bad_requests(self):
         vlm, _ = service()
         for feature, images in (("nope", [("rear", jpeg_b64())]), ("social_confirm", []),

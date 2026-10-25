@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 
 const directions = { ArrowLeft: 'L', ArrowUp: 'fwd', ArrowRight: 'R', ' ': 'stop' };
+// 'P' is the wearer's phone camera, which the app uses while no glasses camera is connected.
+const cameraNames = { F: 'Front camera', R: 'Rear camera', P: 'Phone camera' };
 const names = { L: 'Left', fwd: 'Forward', R: 'Right', stop: 'Stop' };
 export function describe(event) {
   const side = { L: 'behind them, left', R: 'behind them, right', B: 'behind them' }[event.side] || 'near them';
@@ -112,7 +114,7 @@ export function HelperPage() {
       if (stopped.current || socket.current !== ws) return;
       if (message.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(message.data);
-        if (bytes.length < 11 || ![70, 82].includes(bytes[0]) || bytes[9] !== 255 || bytes[10] !== 216) return;
+        if (bytes.length < 11 || !cameraNames[String.fromCharCode(bytes[0])] || bytes[9] !== 255 || bytes[10] !== 216) return;
         const timestamp = Number(new DataView(message.data).getBigUint64(1));
         const next = URL.createObjectURL(new Blob([bytes.subarray(9)], { type: 'image/jpeg' }));
         if (url.current) URL.revokeObjectURL(url.current);
@@ -127,7 +129,7 @@ export function HelperPage() {
         if (event.on) setSince(old => old ?? Date.now());
         else { clearFrame(); setVideo('waiting'); }
       } else if (event.t === 'status') {
-        if (['F', 'R'].includes(event.camera)) setCamera(event.camera);
+        if (cameraNames[event.camera]) setCamera(event.camera);
         if (event.video === 'waiting') { clearFrame(); setVideo('waiting'); }
       } else { const text = describe(event); if (text) addEvent(text); }
     };
@@ -184,8 +186,8 @@ export function HelperPage() {
       <section className="heading"><div><span className="eyebrow">YOU’RE HERE TO HELP</span><h1>{name ? `With ${name}` : 'A shared point of view'}</h1></div><button className="end" onClick={() => { send({ t: 'end' }); finish(); }}>End call</button></section>
       <div className="workspace"><section className="vision panel" aria-label="Glasses camera">
         <div className="viewbar"><span className={live && fresh ? 'badge live' : 'badge'}>{live && fresh ? '● LIVE' : '● CONNECTING'}</span><span>{timer}</span><span className="delay" title="Estimated from phone and browser clocks; clock differences affect this value.">{fresh && delay !== null ? delay < 0 ? 'Delay unavailable · clocks differ' : `Est. delay ~${delay} ms` : 'Delay —'}</span></div>
-        <div className="view">{fresh ? <img src={frame} alt={`${camera === 'F' ? 'Front' : 'Rear'} camera live view from the glasses`} /> : <div className="placeholder"><span aria-hidden="true">◎</span><p>{status}</p><small>The live view will appear here.</small></div>}<span className="camera-label">{camera === 'F' ? 'Front' : 'Rear'} camera</span></div>
-        <div className="viewfooter"><span role="status">{status}</span><div className="toggle" role="group" aria-label="Select camera">{['F', 'R'].map(which => <button key={which} disabled={!live} aria-pressed={camera === which} onClick={() => { if (send({ t: 'cam', which })) { clearFrame(); setVideo('waiting'); setCamera(which); } }}>{which === 'F' ? 'Front' : 'Rear'}</button>)}</div></div>
+        <div className="view">{fresh ? <img src={frame} alt={camera === 'P' ? "Live view from the wearer's phone camera" : `${cameraNames[camera]} live view from the glasses`} /> : <div className="placeholder"><span aria-hidden="true">◎</span><p>{status}</p><small>The live view will appear here.</small></div>}<span className="camera-label">{cameraNames[camera] || 'Camera'}</span></div>
+        <div className="viewfooter"><span role="status">{status}</span>{camera === 'P' ? <small className="secondary">No glasses camera is connected, so you're seeing their phone's camera.</small> : <div className="toggle" role="group" aria-label="Select camera">{['F', 'R'].map(which => <button key={which} disabled={!live} aria-pressed={camera === which} onClick={() => { if (send({ t: 'cam', which })) { clearFrame(); setVideo('waiting'); setCamera(which); } }}>{which === 'F' ? 'Front' : 'Rear'}</button>)}</div>}</div>
       </section>
       <aside className="panel controls"><span className="eyebrow">A NUDGE IN THE RIGHT DIRECTION</span><h2>Guide the wearer</h2><p className="secondary">Each direction sends a distinct buzz to their glasses.</p>
         <div className="arrows" role="group" aria-label="Haptic guidance">{[['L', '←', 'Left arrow'], ['fwd', '↑', 'Up arrow'], ['R', '→', 'Right arrow']].map(([dir, arrow, key]) => <button key={dir} disabled={!fresh} aria-label={`Guide ${names[dir].toLowerCase()} (${key})`} onClick={() => guide(dir)}><span aria-hidden="true">{arrow}</span>{names[dir]}</button>)}</div>

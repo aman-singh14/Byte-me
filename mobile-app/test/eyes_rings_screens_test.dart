@@ -235,7 +235,7 @@ void main() {
 
   testWidgets('Settings shows the laptop address', (tester) async {
     await pump(tester, const SettingsScreen(), await filledLink(tester));
-    expect(find.text('Laptop (backend)'), findsOneWidget);
+    expect(find.text('Laptop (optional)'), findsOneWidget);
     expect(find.textContaining('172.20.10.2:8001 (typed in)'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Muse speed check'), 300);
     expect(find.text(Feature.socialTaps.title), findsOneWidget);

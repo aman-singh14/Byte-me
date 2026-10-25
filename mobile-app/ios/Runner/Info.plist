@@ -33,6 +33,8 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Omni Glasses uses Bluetooth, only if you turn on Together time, to count time spent near your friends.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>When your glasses' cameras aren't connected, Omni Glasses uses your phone's camera for a helper's video and for photos you ask about. Nothing is saved.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Omni Glasses talks to your glasses over your phone's hotspot to warn you about things behind you.</string>
 	<key>NSMicrophoneUsageDescription</key>

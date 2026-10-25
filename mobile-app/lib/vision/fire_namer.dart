@@ -22,12 +22,14 @@ abstract class FireNamer {
 }
 
 /// What a fire on [side] is most likely about: the biggest (so nearest)
-/// object on that side or straight behind. Null if there's nothing there.
+/// object on that side or straight behind. A fire from straight behind (the
+/// back camera's FPGA doesn't say a side) takes the biggest anywhere. Null if
+/// there's nothing there.
 @visibleForTesting
 String? pickFireObject(List<Detection> detections, WearerSide side) {
   Detection? best;
   for (final d in detections) {
-    if (d.side != side && d.side != WearerSide.behind) continue;
+    if (side != WearerSide.behind && d.side != side && d.side != WearerSide.behind) continue;
     if (best == null || d.area > best.area) best = d;
   }
   return best?.label;
@@ -35,7 +37,8 @@ String? pickFireObject(List<Detection> detections, WearerSide side) {
 
 /// Keeps Cam B's stream open (so a frame is ready the moment a fire
 /// arrives) and names fires from it. Cam B is assumed to face backward like
-/// Cam A, so its image sides flip the same way.
+/// Cam A, so its image sides flip the same way. With the real boards, the
+/// FPGA's own camera is the back camera board, so its video is used instead.
 class CamBFireNamer extends ChangeNotifier implements FireNamer {
   CamBFireNamer(this.link, this.detector) {
     link.addListener(_onLink);
@@ -51,8 +54,9 @@ class CamBFireNamer extends ChangeNotifier implements FireNamer {
   static const maxFrames = 3;
   static const maxWait = Duration(milliseconds: 600);
 
-  RearCamera? _camera;
-  RearCamera? get camera => _camera;
+  CameraFeed? _camera;
+  CameraFeed? get camera => _camera;
+  bool _ownsCamera = false;
 
   bool _ready = false;
   Future<void> _queue = Future.value(); // one detection at a time
@@ -67,10 +71,11 @@ class CamBFireNamer extends ChangeNotifier implements FireNamer {
   }
 
   void _onLink() {
-    final url = link.camBStreamUrl;
-    if (url == _camera?.url) return;
-    _camera?.dispose();
-    _camera = url == null ? null : (RearCamera(url)..start());
+    final url = link.camBStreamUrl, back = link.backVideo;
+    if (url != null ? url.toString() == _camera?.source : identical(back, _camera)) return;
+    if (_ownsCamera) _camera?.dispose();
+    _camera = url != null ? (RearCamera(url)..start()) : back;
+    _ownsCamera = url != null;
     notifyListeners();
   }
 
@@ -123,7 +128,7 @@ class CamBFireNamer extends ChangeNotifier implements FireNamer {
   @override
   void dispose() {
     link.removeListener(_onLink);
-    _camera?.dispose();
+    if (_ownsCamera) _camera?.dispose();
     detector.dispose();
     super.dispose();
   }

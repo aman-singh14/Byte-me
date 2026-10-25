@@ -87,7 +87,7 @@ Track? _trackFor(Detection d, List<Track> tracks) {
 class _LiveRearView extends StatelessWidget {
   const _LiveRearView({required this.camera, required this.loop, required this.detectorState});
 
-  final RearCamera camera;
+  final CameraFeed camera;
   final DetectionLoop? loop;
   final DetectorState detectorState;
 

@@ -24,6 +24,7 @@ truth for all UI.
 | `lib/screens/alert_widgets.dart` | Live alert banner on every tab; one app-wide announcer (voice, screen reader, haptics) |
 | `assets/models/` | YOLO26n at 320 px: `.mlpackage.zip` (iOS), `.tflite` (Android) |
 | `tool/export_yolo.py` | Regenerates the models (instructions at the top of the file) |
+| `lib/eyes/` | Eye tracking, near-work, outside time and the rings, on the phone from the eye and front boards (a port of the laptop's `backend/`; `PhoneEyes`, read through `BackendLink` as `PhoneApi`) |
 | `lib/social/` | Together: `rings_source.dart` (the interface the rings code implements, plus a stand-in), `social_api.dart` + `social_store.dart` (server client and state), `side_quests.dart`, `together_time.dart` (Bluetooth) |
 | `../social/` | The social server (FastAPI + SQLite); deploy steps in its README |
 | `lib/screens/` | Bottom navigation (Today, Aware, Eyes, Together) and Settings |
@@ -114,6 +115,47 @@ Check with `flutter doctor`.
    "Glasses connected · 82%", the mock prints `heartbeats from ..., phone
    connected`, and Eyes > Right now shows live distance and lux. Type `drop` in
    the mock to see the link-lost banner on every tab.
+
+## The real camera boards (firmware/)
+
+The boards your teammates wrote talk to the phone directly; no laptop is needed for them.
+All of it is in `lib/net/glasses_link.dart` and `lib/vision/udp_camera.dart`.
+
+| Board | Talks on | The app uses it for |
+|---|---|---|
+| Eye camera (`firmware/esp_camera_eye`) | hello to the phone's UDP **4310**; video UDP **81** (send `WANT`, get `CAMV` chunks) | blinks, partial blinks, squints, low-blink stretches, gaze (Settings > Calibrate gaze) |
+| Front camera (`firmware/esp_camera2_front`) | same, plus `/capture` stills and `/sensor` exposure on HTTP 80 | near-work distance and close-up sessions (YOLO), heads-up and outside time (the rings and points); Call a helper's Front view; the photo for Ask, cropped to where you look |
+| Back camera + FPGA (`firmware/esp_camera3_back`) | UDP **4300**: status JSON, `{"t":"collision"}`, `OMNV` video chunks | rear view and detection, collision alerts (side "behind"; YOLO names it), head turns from the FPGA's gyro, the helper's Rear view; "Glasses connected" |
+
+- **iPhones don't hand apps broadcasts**, so every board has to send to the phone itself
+  (it's always `172.20.10.1` on its own hotspot):
+  - eye and front: put `#define BACKEND_HOST "172.20.10.1"` in their `secrets.h` (no code change);
+  - back camera: it only broadcasts its status today. The app pokes every hotspot address on
+    4300 so the board sends it video, but the board also has to send its status and
+    collisions to its viewers (or to 172.20.10.1). Until then the app gets back video (while
+    the FPGA tracks) but no FPGA status or collisions.
+- **No buzz motor** on any board: buzzes (alerts, social taps, helper arrows, group breaks)
+  play as phone vibrations when no frame ESP32 is connected (`lib/alerts/phone_buzzer.dart`);
+  the words are spoken as before.
+- The FPGA's gyro gives only how fast the head turns, not which way, so turns pause approach
+  tracking but can't count as a glance back. The back video only flows while the FPGA tracks
+  something unless the sketch sets `STREAM_ALWAYS 1`; the app's own detection needs it for
+  social taps and "someone's following".
+- `test/firmware_contract_test.dart` reads the sketches and checks ports, chunk headers and
+  message fields against the app; the back camera's broadcast-only status shows as a skipped
+  test with the fix in its reason.
+
+**Simulate the boards** (laptop on the phone's hotspot, no backend running on it):
+
+```bash
+.venv/bin/python tools/fake_udp_camera.py --phone 172.20.10.1 --back-status phone
+```
+
+Eye and front say hello to the phone and serve video and stills; the back camera + FPGA
+sends status and video. Type `track` (video on/off), `collide` or `turn`, then Enter.
+`--back-status broadcast` (the default) behaves like today's back firmware, so the phone
+gets no status: that's what to expect until the firmware change. In the iOS Simulator use
+`--phone 127.0.0.1 --back-port 4301` (the app has 4300 on the same Mac).
 
 ## Rear view and detection
 
@@ -262,9 +304,26 @@ Settings > Together server.
   days). Needs real phones (the simulator has no Bluetooth). Limitation: the
   id doesn't rotate yet, and iOS stops advertising in the background.
 - **Rings:** the social features read today's Heads-up and Outside minutes
-  through `RingsSource` (`lib/social/rings_source.dart`). `StandInRings`
-  fills in from sensor samples until the real rings code implements it;
-  swap it in `main.dart`. Only the percentages leave the phone.
+  through `RingsSource` (`lib/social/rings_source.dart`). They come from
+  `lib/eyes/` on the phone (or a laptop backend, if one is set);
+  `StandInRings` fills in from sensor samples while neither answers. Only
+  the percentages leave the phone.
+
+## Eye tracking on the phone (lib/eyes/)
+
+The laptop's eye and front-camera code, ported to Dart so nothing needs the laptop:
+`pupil.dart` (close-up pupil, `backend/pupil.py` + `eye_tracking.py` CloseupEye),
+`blinks.dart`, `gaze.dart`, `nearwork.dart`, `outdoor.dart`, `eye_history.dart` (rings,
+points, 8 days of numbers in SharedPreferences; no frames). `phone_eyes.dart` runs them:
+eye frames on their own isolate, front frames ~3 times a second through YOLO.
+
+`test/eye_parity_test.dart` checks the port against the laptop on the same frames. After
+changing the laptop's eye code, regenerate them and make the app match:
+
+    ../.venv/bin/python ../tools/make_eye_fixtures.py
+
+A laptop backend still takes over when its address is typed in Settings (or it says hello
+as the frame); with neither, the phone does it all.
 
 ## Voice questions
 
@@ -294,6 +353,16 @@ online; the transcript and selected front-camera view go to the laptop backend,
 and optionally Muse for richer answers. Without Muse, the answer is limited to
 local object descriptions, rather than arbitrary visual question answering.
 
+**Without the laptop** (no backend connected, for example a `CLOUD_URL` build
+on cellular), Ask uses the **phone's back camera** instead: hold, point the
+phone at what you're asking about, ask, let go. The card says so ("Phone camera ·
+your question and one photo go to Meta"). The camera runs only while the
+button is held and the answer comes back. Then one photo plus your words go to
+Muse's `ask` feature (`lib/assist/voice_questions.dart`, `PhoneLook`), through
+the cloud server or the laptop's `/vlm`. There's no gaze or left/right here:
+it's whatever the phone is pointed at. This applies even with glasses
+connected, because their front camera is read by the laptop.
+
 The microphone is on only while the button is held. Sliding off the button or
 leaving the app drops the question. If iOS fails to start the recognizer (error
 300), the app retries once while the button is still held, then says so; the
@@ -316,6 +385,13 @@ tab, and a card on Today).
   only go out while a helper is connected. Rear frames come from the rear
   stream rear vision already has open (an ESP32-CAM serves one client at a
   time); the front stream is opened only while the helper is watching it.
+- **No glasses camera:** while no glasses camera has said hello (Cam A),
+  the helper sees the **phone's back camera** instead (`lib/vision/phone_camera.dart`,
+  camera id `P`). The app says "Your phone's camera: no glasses camera is
+  connected", and the helper page labels it **Phone camera** and hides the
+  Front / Rear switch. When the glasses connect, the call switches to the
+  camera that was picked last. Phone frames are 640x480 JPEGs at up to 5 fps,
+  encoded on the phone (the camera plugin streams raw frames).
 - **Guidance:** the helper's Left / Forward / Right / Stop goes to the frame
   as `{"t":"guide","dir":...}` (a buzz unlike any alert) and is spoken.
 - **Alerts** (approach, "someone behind you" and social taps) are passed on to the helper.
@@ -460,7 +536,8 @@ Try it with the mock: type `person l` (walks up on your left and stops for
 Every snapshot feature goes through one service: `lib/assist/vlm.dart` in
 the app, `POST /vlm/{feature}` on the laptop backend (`backend/vlm.py`, which
 holds the key and the spending cap). Each feature has a prompt, a JSON
-schema, and a 4 s timeout with a fallback. The rules for every call are: positions
+schema, and a 4 s timeout with a fallback (8 s for `ask`, the phone-camera
+question from Ask). The rules for every call are: positions
 and actions only, never identify anyone or guess age, race, gender or
 emotion, say when unsure, never call anything safe. Images and answers aren't
 stored.

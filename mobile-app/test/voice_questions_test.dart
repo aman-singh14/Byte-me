@@ -4,8 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/widgets.dart';
 import 'package:omni_glasses/alerts/voice.dart';
 import 'package:omni_glasses/assist/voice_questions.dart';
+import 'package:omni_glasses/assist/vlm.dart';
 import 'package:omni_glasses/net/backend_api.dart';
 import 'package:omni_glasses/net/backend_link.dart';
+import 'package:omni_glasses/net/backend_models.dart';
+import 'package:omni_glasses/net/glasses_link.dart' show CameraBoard;
+import 'package:omni_glasses/vision/phone_camera.dart';
 
 import 'backend_fakes.dart';
 
@@ -49,6 +53,38 @@ class WaitingVoice implements Voice {
   Future<void> say(String text, {bool interrupt = false}) {
     said.add(text);
     return done.future;
+  }
+}
+
+class FakePhoneLook implements PhoneLook {
+  int warm = 0;
+  final asked = <String>[];
+
+  @override
+  PhoneCamera get camera => throw UnimplementedError();
+
+  @override
+  VlmService get vlm => throw UnimplementedError();
+
+  @override
+  CameraBoard? Function()? get glassesFront => null;
+
+  @override
+  String? Function()? get gaze => null;
+
+  @override
+  bool get fromGlasses => false;
+
+  @override
+  void warmUp() => warm++;
+
+  @override
+  void coolDown() => warm--;
+
+  @override
+  Future<LookResult> ask(String question) async {
+    asked.add(question);
+    return const LookResult(regionSource: 'phone', museAnswer: 'A red mug.');
   }
 }
 
@@ -156,5 +192,32 @@ void main() {
     expect(asked(), 0);
     expect(questions.question, isNull);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
+  testWidgets('without the laptop the question goes with a phone photo, camera on only while needed', (tester) async {
+    final away = BackendLink(store: MemorySettingsStore(), apiFactory: (u) => BackendApi(u, transport: transport));
+    addTearDown(away.dispose);
+    final phone = FakePhoneLook();
+    final questions = VoiceQuestions(backend: away, speech: speech, phone: phone, watchLifecycle: false);
+    addTearDown(questions.dispose);
+    expect(questions.usesPhone, isTrue);
+
+    await questions.hold();
+    expect(phone.warm, 1); // warming up while they ask
+    await questions.release(); // nothing heard
+    expect(phone.warm, 0);
+    expect(phone.asked, isEmpty);
+
+    await questions.hold();
+    speech.result!('What color is this mug', true);
+    await questions.release();
+    await tester.pump();
+    expect(phone.asked, ['What color is this mug']);
+    expect(questions.answer?.spoken, 'A red mug.');
+    expect(phone.warm, 0);
+    expect(asked(), 0); // the laptop was never asked
+
+    // With the laptop there, it's the laptop's eyes as before.
+    expect(VoiceQuestions(backend: backend, speech: speech, watchLifecycle: false).usesPhone, isFalse);
   });
 }

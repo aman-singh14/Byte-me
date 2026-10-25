@@ -53,6 +53,12 @@ class FakeCameras implements HelperCameras {
   final opened = <HelperCamera>{};
 
   @override
+  bool glasses = true;
+
+  @override
+  String? problem(HelperCamera which) => null;
+
+  @override
   ValueListenable<Uint8List?>? open(HelperCamera which) {
     opened.add(which);
     return feeds[which];
@@ -186,6 +192,29 @@ void main() {
     socket.server({'t': 'ack'});
     await tick();
     expect(socket.frames.last.sublist(9), jpeg(4)); // the newest, 3 was skipped
+  });
+
+  test('without a glasses camera the helper sees the phone camera, until the glasses connect', () async {
+    cameras.glasses = false;
+    expect(call.camera, HelperCamera.phone);
+    await call.start();
+    final socket = sockets.single;
+    socket.server({'t': 'helper', 'on': true});
+    await tick(0);
+    expect(cameras.opened, {HelperCamera.phone});
+    cameras.feeds[HelperCamera.phone]!.value = jpeg(1);
+    await tick();
+    expect(String.fromCharCode(socket.frames.single[0]), 'P');
+
+    socket.server({'t': 'cam', 'which': 'R'}); // no glasses: stays on the phone
+    await tick(0);
+    expect(call.camera, HelperCamera.phone);
+
+    cameras.glasses = true; // they said hello: the pick takes over
+    await tick();
+    expect(call.camera, HelperCamera.rear);
+    expect(cameras.opened, {HelperCamera.rear});
+    expect(socket.texts.last, {'t': 'status', 'camera': 'R', 'video': 'waiting'});
   });
 
   test("acts on the helper's commands", () async {

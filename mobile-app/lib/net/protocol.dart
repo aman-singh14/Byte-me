@@ -14,6 +14,30 @@ const int appUdpPort = 4210;
 /// The rear camera serves MJPEG on this port at /stream.
 const int camStreamPort = 81;
 
+// The real boards (firmware/): each camera says where it is with a
+// "cam_hello" on [camHelloPort]. The eye and front cameras send video over
+// UDP on [camVideoPort] to whoever sends them "WANT"; the back camera (with
+// the FPGA) sends its status, collisions and video on [backCamPort]. Video
+// frames are JPEGs cut into chunks, each with a [chunkHeaderBytes] header.
+// test/firmware_contract_test.dart checks all of this against the sketches.
+
+/// Cameras announce themselves here: {"t":"cam_hello","role":"eye"|"front",...}.
+const int camHelloPort = 4310;
+
+/// The eye and front cameras' video (UDP) and MJPEG (TCP) port.
+const int camVideoPort = 81;
+
+/// The back camera's status JSON and video, both ways.
+const int backCamPort = 4300;
+
+/// A video viewer says this at least every few seconds to keep getting frames.
+const String videoWant = 'WANT', videoStop = 'STOP';
+
+/// "CAMV" (eye, front) or "OMNV" (back), frame_id u32, chunk u16, chunks u16,
+/// jpeg_len u32, all little-endian, then the chunk's JPEG bytes.
+const int chunkHeaderBytes = 16;
+const String eyeFrontMagic = 'CAMV', backMagic = 'OMNV';
+
 enum WearerSide {
   left('L'),
   right('R'),
@@ -130,6 +154,88 @@ class FireMessage extends GlassesMessage {
     final k = j['k'];
     if (side == null || k is! num) return null;
     return FireMessage(side: side, k: k.round());
+  }
+}
+
+/// A camera board says where it is (UDP [camHelloPort], every 2 s).
+class CamHello {
+  const CamHello({required this.role, this.streamPort = camVideoPort, this.httpPort = 80, this.udp = true});
+
+  /// "eye", "front" (or "back", if its firmware ever says hello).
+  final String role;
+  final int streamPort, httpPort;
+
+  /// Video over UDP with WANT (the boards), rather than MJPEG only.
+  final bool udp;
+
+  static CamHello? parse(List<int> bytes) {
+    final j = _json(bytes);
+    if (j == null || j['t'] != 'cam_hello') return null;
+    final role = j['role'], stream = j['stream_port'], http = j['http_port'];
+    if (role is! String || role.isEmpty) return null;
+    return CamHello(
+      role: role,
+      streamPort: stream is int && stream > 0 ? stream : camVideoPort,
+      httpPort: http is int && http > 0 ? http : 80,
+      udp: j['stream'] != 'mjpeg',
+    );
+  }
+}
+
+/// The back camera's report of the FPGA (UDP [backCamPort], ~5 a second):
+/// {"t":"rear","tracking":1,"collision":0,"turning":0,"imu":1,"fpga":1,"yaw_dps":12.5,...}
+class RearStatus {
+  const RearStatus({
+    this.tracking = false,
+    this.collision = false,
+    this.turning = false,
+    this.imu = false,
+    this.fpga = false,
+    this.turnRate = 0,
+    this.k = 0,
+  });
+
+  /// The FPGA follows something moving behind.
+  final bool tracking;
+
+  /// It's coming at the wearer (the board's buzzer sounds too).
+  final bool collision;
+
+  /// The head turns faster than 90 deg/s, so the FPGA ignores everything.
+  final bool turning;
+
+  /// The FPGA's gyro and the FPGA itself answer.
+  final bool imu, fpga;
+
+  /// How fast the head turns, degrees per second. Size only: the FPGA's
+  /// gyro doesn't say which way.
+  final double turnRate;
+
+  /// The looming detector's potential.
+  final int k;
+
+  static RearStatus? fromJson(Map<String, dynamic> j) {
+    if (j['t'] != 'rear') return null;
+    bool flag(String key) => j[key] is num && j[key] != 0;
+    final yaw = j['yaw_dps'], k = j['k'];
+    return RearStatus(
+      tracking: flag('tracking'),
+      collision: flag('collision'),
+      turning: flag('turning'),
+      imu: flag('imu'),
+      fpga: flag('fpga'),
+      turnRate: yaw is num ? yaw.abs().toDouble() : 0,
+      k: k is num ? k.round() : 0,
+    );
+  }
+}
+
+Map<String, dynamic>? _json(List<int> bytes) {
+  try {
+    final j = jsonDecode(utf8.decode(bytes));
+    return j is Map<String, dynamic> ? j : null;
+  } on FormatException {
+    return null;
   }
 }
 

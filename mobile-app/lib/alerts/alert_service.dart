@@ -23,6 +23,7 @@ class AlertService extends ChangeNotifier {
   AlertService(this.link, this.vision, {AlertEngine? engine, this.namer}) : engine = engine ?? AlertEngine() {
     _subs.add(link.sens.listen((s) => _handle(this.engine.addSens(DateTime.now(), yawRate: s.yawRate, lux: s.lux))));
     _subs.add(link.fires.listen((f) => onFire(f.side)));
+    _subs.add(link.turnRates.listen((r) => _handle(this.engine.addTurnRate(DateTime.now(), r))));
     vision.addListener(_onVision);
     _onVision();
   }

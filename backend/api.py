@@ -21,7 +21,7 @@ same network can call it. Interactive docs at /docs.
     POST /assist/describe        {"question"?}: same, whole forward view
     GET  /assist/last            the last answer
     GET  /muse/usage             Muse spend, caps, tokens, recent calls
-    POST /vlm/{feature}          {"images": [{"camera", "jpeg"}], "use_front"?}: one structured VLM answer (backend/vlm.py)
+    POST /vlm/{feature}          {"images": [{"camera", "jpeg"}], "use_front"?, "question"?}: one structured VLM answer (backend/vlm.py)
     POST /rear/packets           raw rear-protocol packets (HTTP transport for an ESP32 bridge)
     GET  /rear/status            FPGA link: online, packet/CRC stats, last result
     GET  /rear/events            recent rear results (what, dangerous, side, time to contact)
@@ -105,6 +105,7 @@ class VlmImage(BaseModel):
 class VlmRequest(BaseModel):
     images: list[VlmImage] = []
     use_front: bool = False
+    question: str | None = None
 
 
 class GazeCalibration(BaseModel):
@@ -341,7 +342,7 @@ def create_app(rt):
     def vlm(feature: str, body: VlmRequest | None = None):
         body = body or VlmRequest()
         try:
-            return rt.vlm.run(feature, [(i.camera, i.jpeg) for i in body.images], body.use_front)
+            return rt.vlm.run(feature, [(i.camera, i.jpeg) for i in body.images], body.use_front, body.question)
         except VlmError as e:
             raise HTTPException(400, str(e)) from e
         except MuseUnavailable as e:

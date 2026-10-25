@@ -27,7 +27,9 @@ import '../alerts/voice.dart';
 import '../net/cloud.dart';
 import '../net/protocol.dart';
 import '../vision/mjpeg.dart';
+import '../vision/phone_camera.dart';
 import '../vision/rear_vision.dart';
+import '../vision/udp_camera.dart';
 import 'helper_audio.dart';
 
 /// Where the helper server is: the cloud server (CLOUD_URL) if the app has one.
@@ -43,7 +45,13 @@ const frontCamUrl = String.fromEnvironment('FRONT_CAM_URL', defaultValue: 'http:
 
 enum HelperCamera {
   front('F', 'Front'),
-  rear('R', 'Rear');
+  rear('R', 'Rear'),
+
+  /// The phone's back camera, used automatically while no glasses camera is connected.
+  phone('P', 'Phone');
+
+  /// The glasses' cameras, the ones the wearer or helper can pick.
+  static const glasses = [front, rear];
 
   const HelperCamera(this.wire, this.label);
   final String wire;
@@ -115,30 +123,61 @@ class IoHelperSocket implements HelperSocket {
 /// ESP32-CAM serves one client at a time, so it's shared with rear vision),
 /// and the front camera's stream, opened only while it's selected.
 abstract class HelperCameras {
+  /// Whether a glasses camera is connected; without one, calls use the phone's.
+  bool get glasses;
+
   /// The newest frame of [which], or null if that camera isn't there yet.
   ValueListenable<Uint8List?>? open(HelperCamera which);
   void close(HelperCamera which);
+
+  /// Why the camera in use can't show anything, to tell the wearer.
+  String? problem(HelperCamera which) => null;
 }
 
 class GlassesCameras implements HelperCameras {
-  GlassesCameras(this.vision, {Uri? front}) : front = front ?? Uri.parse(frontCamUrl);
+  GlassesCameras(this.vision, {Uri? front, PhoneCamera? phone})
+    : front = front ?? Uri.parse(frontCamUrl),
+      phone = phone ?? PhoneCamera();
 
   final RearVision vision;
+
+  /// The front camera's MJPEG stream when no front camera board said hello (mock_glasses.py).
   final Uri front;
-  RearCamera? _front;
+  final PhoneCamera phone;
+  CameraFeed? _front;
+
+  /// A glasses camera is on the hotspot: the rear one rear vision uses, or the front board.
+  @override
+  bool get glasses => vision.camera != null || vision.link.frontCam != null;
+
+  /// The front camera board's UDP video, or the MJPEG stream.
+  CameraFeed _openFront() {
+    final board = vision.link.frontCam;
+    return board == null ? RearCamera(front) : UdpCamera(board.address, board.hello.streamPort);
+  }
 
   @override
   ValueListenable<Uint8List?>? open(HelperCamera which) => switch (which) {
     HelperCamera.rear => vision.camera?.frame,
-    HelperCamera.front => (_front ??= RearCamera(front)..start()).frame,
+    HelperCamera.front => (_front ??= _openFront()..start()).frame,
+    HelperCamera.phone => (phone..start()).frame,
   };
 
   @override
   void close(HelperCamera which) {
-    if (which != HelperCamera.front) return; // the rear stream belongs to rear vision
-    _front?.dispose();
-    _front = null;
+    switch (which) {
+      case HelperCamera.rear:
+        return; // the rear stream belongs to rear vision
+      case HelperCamera.front:
+        _front?.dispose();
+        _front = null;
+      case HelperCamera.phone:
+        unawaited(phone.stop());
+    }
   }
+
+  @override
+  String? problem(HelperCamera which) => which == HelperCamera.phone ? phone.error : null;
 }
 
 /// Builds a frame for the server: camera id, 8-byte big-endian timestamp
@@ -208,8 +247,18 @@ class HelperCall extends ChangeNotifier {
   String? _helperUrl;
   String? get helperUrl => _helperUrl;
 
+  /// The camera the helper sees: the picked glasses camera, or the phone's
+  /// while no glasses camera is connected.
+  HelperCamera get camera => _uploader != null ? _camera : _wanted;
   HelperCamera _camera = HelperCamera.front;
-  HelperCamera get camera => _camera;
+
+  /// What the wearer or helper picked last.
+  HelperCamera _picked = HelperCamera.front;
+
+  HelperCamera get _wanted => cameras.glasses ? _picked : HelperCamera.phone;
+
+  /// Why the camera in use shows nothing, to tell the wearer.
+  String? get cameraProblem => cameras.problem(camera);
 
   // Status changes (helper connected, call ended) are spoken by
   // HelperAnnouncer, which knows whether a screen reader is on. Guidance words
@@ -426,8 +475,15 @@ class HelperCall extends ChangeNotifier {
     });
   }
 
-  /// Switches the camera the helper sees.
+  /// Switches between the glasses' cameras. Without glasses the phone camera
+  /// stays on, and the pick takes effect once they connect.
   void selectCamera(HelperCamera which) {
+    if (which == HelperCamera.phone) return; // only ever automatic
+    _picked = which;
+    _switchTo(_wanted);
+  }
+
+  void _switchTo(HelperCamera which) {
     if (which == _camera) return;
     final old = _camera;
     _camera = which;
@@ -441,6 +497,7 @@ class HelperCall extends ChangeNotifier {
   }
 
   void _startUploading() {
+    _camera = _wanted;
     _bindFeed();
     _uploader?.cancel();
     _uploader = Timer.periodic(frameInterval, (_) => _upload());
@@ -463,6 +520,8 @@ class HelperCall extends ChangeNotifier {
     _feed?.removeListener(_onFrame);
     _feed = null;
     _latest = null;
+    _latestAt = null; // the next camera's video is "waiting" until it sends a frame
+    _cameraOnline = false;
   }
 
   void _onFrame() {
@@ -473,8 +532,12 @@ class HelperCall extends ChangeNotifier {
   }
 
   void _upload() {
-    // The rear stream may only appear after the call started (Cam A's hello).
-    if (_feed == null) _bindFeed();
+    // The glasses' cameras may only appear after the call started (Cam A's hello).
+    if (_wanted != _camera) {
+      _switchTo(_wanted);
+    } else if (_feed == null) {
+      _bindFeed();
+    }
     final online = _latestAt != null && _clock().difference(_latestAt!) < const Duration(seconds: 3);
     if (online != _cameraOnline) {
       _cameraOnline = online;

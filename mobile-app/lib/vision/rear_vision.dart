@@ -85,8 +85,9 @@ class DetectionLoop extends ChangeNotifier {
 
 enum DetectorState { loading, ready, failed }
 
-/// Starts the rear camera when Cam A says hello (and restarts it if its
-/// address changes), and runs detection on it.
+/// Watches the rear camera and runs detection on it: the back camera board's
+/// video (firmware/esp_camera3_back) when it's there, else Cam A's MJPEG
+/// stream (mock_glasses.py) once it says hello. Restarts when that changes.
 class RearVision extends ChangeNotifier {
   RearVision(this.link, this.detector) {
     link.addListener(_onLink);
@@ -97,8 +98,11 @@ class RearVision extends ChangeNotifier {
   final GlassesLink link;
   final ObjectDetector detector;
 
-  RearCamera? _camera;
-  RearCamera? get camera => _camera;
+  CameraFeed? _camera;
+  CameraFeed? get camera => _camera;
+
+  /// We started [_camera] (Cam A's stream), so we stop it; the back camera's belongs to the link.
+  bool _ownsCamera = false;
 
   DetectionLoop? _loop;
   DetectionLoop? get loop => _loop;
@@ -119,12 +123,14 @@ class RearVision extends ChangeNotifier {
   }
 
   void _onLink() {
-    final url = link.streamUrl;
-    if (url == _camera?.url) return;
+    final back = link.backVideo, url = link.streamUrl;
+    // Same camera as now (identical() also covers "none, and still none").
+    if (identical(back, _camera) || (back == null && url != null && url.toString() == _camera?.source)) return;
     _loop?.dispose();
     _loop = null;
-    _camera?.dispose();
-    _camera = url == null ? null : (RearCamera(url)..start());
+    if (_ownsCamera) _camera?.dispose();
+    _camera = back ?? (url == null ? null : (RearCamera(url)..start()));
+    _ownsCamera = back == null && url != null;
     _restartLoop();
     notifyListeners();
   }
@@ -139,7 +145,7 @@ class RearVision extends ChangeNotifier {
   void dispose() {
     link.removeListener(_onLink);
     _loop?.dispose();
-    _camera?.dispose();
+    if (_ownsCamera) _camera?.dispose();
     detector.dispose();
     super.dispose();
   }

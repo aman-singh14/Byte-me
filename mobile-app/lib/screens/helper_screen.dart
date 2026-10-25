@@ -200,18 +200,33 @@ class _LivePanel extends StatelessWidget {
         SizedBox(height: space.l),
         Text('Camera they see', style: context.type.label),
         SizedBox(height: space.s),
-        SegmentedButton<HelperCamera>(
-          segments: [
-            for (final cam in HelperCamera.values)
-              ButtonSegment(
-                value: cam,
-                label: Text(cam.label),
-                icon: Icon(cam == HelperCamera.front ? Symbols.visibility_rounded : Symbols.history_rounded),
+        if (call.camera == HelperCamera.phone)
+          Row(
+            children: [
+              ExcludeSemantics(child: Icon(Symbols.smartphone_rounded, color: c.textPrimary)),
+              SizedBox(width: space.s),
+              Expanded(
+                child: Text(
+                  call.cameraProblem ??
+                      "Your phone's camera: no glasses camera is connected. Point your phone where they should look.",
+                  style: context.type.body,
+                ),
               ),
-          ],
-          selected: {call.camera},
-          onSelectionChanged: (s) => call.selectCamera(s.first),
-        ),
+            ],
+          )
+        else
+          SegmentedButton<HelperCamera>(
+            segments: [
+              for (final cam in HelperCamera.glasses)
+                ButtonSegment(
+                  value: cam,
+                  label: Text(cam.label),
+                  icon: Icon(cam == HelperCamera.front ? Symbols.visibility_rounded : Symbols.history_rounded),
+                ),
+            ],
+            selected: {call.camera},
+            onSelectionChanged: (s) => call.selectCamera(s.first),
+          ),
         if (guide != null) ...[
           SizedBox(height: space.l),
           Semantics(

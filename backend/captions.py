@@ -45,6 +45,7 @@ mock that needs no key or network:
 import argparse
 import asyncio
 import json
+import ssl
 import time
 import wave
 
@@ -99,6 +100,15 @@ def parse_start(msg):
     return settings
 
 
+def _tls():
+    """python.org's macOS Python has no CA certificates; use certifi's when it's installed."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 class UpstreamClosed(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -120,7 +130,7 @@ class MetaUpstream:
         from websockets.exceptions import ConnectionClosed
 
         try:
-            self.ws = await connect(self.url, open_timeout=10, max_size=2**20)
+            self.ws = await connect(self.url, ssl=_tls(), open_timeout=10, max_size=2**20)
             await self.ws.send(json.dumps({"authorization": {"accessToken": f"Bearer {self.key}"}, **settings}))
             ack = json.loads(await asyncio.wait_for(self.ws.recv(), 10))
         except ConnectionClosed as e:
