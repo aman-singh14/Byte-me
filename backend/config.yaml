@@ -26,8 +26,8 @@ cameras:
     fallback: null
     fps: 3                # 320x240 stream, analysed 2-5 times a second (YOLO near-work + brightness)
     still_size: vga       # one /capture?size=vga|svga still, on demand only (for Muse)
-  # BACK camera (firmware/esp_camera3_back): UDP 8103, its own video + status format; the backend does
-  # not read it yet. Here the rear camera arrives as FPGA events (rear.mode: fpga, UDP 4300).
+  # BACK camera (firmware/esp_camera3_back): UDP 4300, its own video + status format; the backend does
+  # not read it yet (its rear receiver below also uses UDP 4300 and skips those packets).
   # For rear.mode: software, add  rear: {source: "<MJPEG URL>"}
 
 discovery:
@@ -186,7 +186,7 @@ app_bridge:               # speak mobile-app's UDP protocol so Aman's app shows 
 
 api:
   host: 0.0.0.0
-  port: 8000
+  port: 8001                # 8000 is the Together server (social/)
 
 db:
   path: backend/data/mega.db

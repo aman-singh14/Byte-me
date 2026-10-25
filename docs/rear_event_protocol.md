@@ -176,7 +176,7 @@ All three carry the same packets, byte for byte. The backend can run any of them
 
 ### (c) HTTP: ESP32 bridge → laptop
 
-- `POST http://<laptop>:8000/rear/packets` with `Content-Type: application/octet-stream`.
+- `POST http://<laptop>:8001/rear/packets` with `Content-Type: application/octet-stream`.
   The body is one or more packets concatenated.
 - POST the EVENT **by itself first** (so the warning is not delayed), then the clip
   packets in one or more POSTs.

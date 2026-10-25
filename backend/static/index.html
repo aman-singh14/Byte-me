@@ -269,7 +269,7 @@ td, th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(
 
 <script>
 "use strict";
-// Backend URL: same origin, or ?api=http://192.168.1.20:8000 when the page is opened from elsewhere.
+// Backend URL: same origin, or ?api=http://192.168.1.20:8001 when the page is opened from elsewhere.
 const THEME = new URLSearchParams(location.search).get("theme");
 if (THEME) document.documentElement.dataset.theme = THEME;
 const API = (new URLSearchParams(location.search).get("api") || location.origin).replace(/\/$/, "");

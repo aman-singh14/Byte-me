@@ -23,14 +23,19 @@ Wi-Fi is station mode only: all three cameras join the `espholder` network, pass
 
 ## Ports
 
-Each camera's live stream has its own port, so they never clash with each other or with the laptop
-(backend API 8000, rear events UDP 4300, camera hellos UDP 4310, OBS 4455, macOS AirPlay 5000/7000):
+Each camera's live stream has its own port. Laptop side: backend API 8001, Together server 8000,
+camera hellos UDP 4310, phone app UDP 4210 (mock_glasses 4211/4212), helper relay 8020, OBS 4455,
+macOS AirPlay 5000/7000.
 
 | Camera | Board | Live stream | Other |
 |---|---|---|---|
 | EYE | esp_camera (`esp_camera_eye/`) | `http://<ip>:8101/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
 | FRONT | esp_camera2 (`esp_camera2_front/`) | `http://<ip>:8102/stream` (MJPEG) | `/capture`, `/sensor`, `/status` on port 80; hello to UDP 4310 |
-| BACK | esp_camera3 (`esp_camera3_back/`) | UDP 8103 (JPEG chunks + status JSON) | none |
+| BACK | esp_camera3 (`esp_camera3_back/`) | UDP 4300 (JPEG chunks + status JSON) | none |
+
+UDP 4300 is also where the backend listens for the FPGA's binary rear-event packets
+(`docs/rear_event_protocol.md`). The backend ignores the back camera's packets (wrong format), but
+`tools/rear_udp_viewer.py` cannot listen on 4300 while the backend is running on the same laptop.
 Both sketches compile with arduino-cli and esp32 core 3.3.12 (`esp32:esp32:esp32cam`).
 
 ## One-time setup (Arduino IDE 2)
@@ -102,12 +107,12 @@ Quick check from the laptop: open `http://<ip>:8101/stream` (eye) or `:8102/stre
 
 ## Back camera (`esp_camera3_back/`)
 
-A copy of the FPGA teammate's code from `fpga/FPGA/` (that folder stays as it is). Only the
-sketch's header comment is new; the code, Verilog and constraints are byte-for-byte the same.
+A copy of the FPGA teammate's code from `fpga/FPGA/` (that folder stays as it is), byte-for-byte the
+same: sketch, Verilog, constraints, settings and viewer.
 
 | File | Runs on | What |
 |---|---|---|
-| `esp_camera3_back.ino` | back ESP32-CAM | camera -> 80x60 grayscale -> SPI to the FPGA; reads the FPGA's status; buzzer on collision; JPEG video + status JSON over UDP 8103 |
+| `esp_camera3_back.ino` | back ESP32-CAM | camera -> 80x60 grayscale -> SPI to the FPGA; reads the FPGA's status; buzzer on collision; JPEG video + status JSON over UDP 4300 |
 | `fpga/omni_rear.v` | Tang Nano 20K | SPI slave, LGMD looming detector, box-growth collision decision, MPU6050 head-turn gate (> 90 deg/s = ignore) |
 | `fpga/omni_rear.cst` | Tang Nano 20K | pin constraints (SPI 73/53/72/71, I2C 30/31, LEDs) |
 | `fpga/tuned_params.json` | laptop | the detector settings the Verilog parameters were taken from (`fpga/FPGA/lgmd_tuner.py`) |
@@ -131,5 +136,5 @@ GPIO2 <- 71 (MISO), GPIO12 -> Grove buzzer SIG; MPU6050 SCL -> FPGA 30, SDA -> 3
    (needs `opencv-python` and `numpy`). Video only flows while the FPGA is tracking something
    (`STREAM_ALWAYS 1` in the sketch streams all the time, for testing).
 
-Note: the back camera speaks its own UDP 8103 format, not `docs/rear_event_protocol.md`, so the
+Note: the back camera speaks its own UDP 4300 format, not `docs/rear_event_protocol.md`, so the
 backend's `backend/rear/` receiver does not pick it up yet; use the viewer above.

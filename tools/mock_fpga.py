@@ -7,7 +7,7 @@
     python tools/mock_fpga.py --every 12 --scene cycle   # person / leaves / recede / square, forever
     python tools/mock_fpga.py --video clip.mp4        # last 3 s of a video file
     python tools/mock_fpga.py --transport serial --serial pty   # virtual serial port (prints its path)
-    python tools/mock_fpga.py --transport http        # POST to http://localhost:8000/rear/packets
+    python tools/mock_fpga.py --transport http        # POST to http://localhost:8001/rear/packets
     python tools/mock_fpga.py --baud 921600           # pace the bytes like a real UART
 
 The EVENT's K values and region come from running lgmd.py over the clip, as the FPGA would.
@@ -116,7 +116,7 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=4300)
     ap.add_argument("--serial", default="pty", help="serial device, or 'pty' for a virtual one")
-    ap.add_argument("--http", default="http://localhost:8000/rear/packets")
+    ap.add_argument("--http", default="http://localhost:8001/rear/packets")
     ap.add_argument("--baud", type=int, help="pace bytes like a UART at this baud rate")
     ap.add_argument("--every", type=float, help="repeat every N seconds")
     ap.add_argument("--count", type=int, help="stop after N events (default 1, or forever with --every)")

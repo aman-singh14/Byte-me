@@ -103,7 +103,7 @@ class BackendSettingsTile extends StatelessWidget {
               controller: controller,
               autofocus: true,
               keyboardType: TextInputType.url,
-              decoration: const InputDecoration(labelText: 'Address', hintText: '172.20.10.2:8000'),
+              decoration: const InputDecoration(labelText: 'Address', hintText: '172.20.10.2:8001'),
             ),
           ],
         ),

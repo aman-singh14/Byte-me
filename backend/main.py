@@ -430,7 +430,7 @@ def main(argv=None):
     if args.mock_fpga:
         start_mock_fpga(cfg, args.mock_fpga)
     app = create_app(rt)
-    host, port = cfg["api"].get("host", "0.0.0.0"), cfg["api"].get("port", 8000)
+    host, port = cfg["api"].get("host", "0.0.0.0"), cfg["api"].get("port", 8001)
     print(f"[api] dashboard http://localhost:{port}/   docs http://localhost:{port}/docs")
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
     try:

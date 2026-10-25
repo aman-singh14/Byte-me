@@ -2,7 +2,7 @@
 """
 rear_udp_viewer.py - watch the Omni Glasses rear camera on the laptop.
 
-    py rear_udp_viewer.py                 listen on UDP 8103 (laptop must be on the "espholder" Wi-Fi)
+    py rear_udp_viewer.py                 listen on UDP 4300 (laptop must be on the "espholder" Wi-Fi)
     py rear_udp_viewer.py --esp 10.0.0.42 also tell the ESP32-CAM to send straight to this laptop
 
 Shows the live video (the ESP only streams while the FPGA is tracking something) with
@@ -18,7 +18,7 @@ import time
 import cv2
 import numpy as np
 
-PORT = 8103   # back camera (firmware/esp_camera3_back UDP_PORT)
+PORT = 4300
 
 
 def main():
@@ -109,7 +109,7 @@ def main():
         info = (f"video {fps:4.1f} fps   esp {status.get('fps', 0)} fps   size {status.get('size', 0)}   "
                 f"yaw {status.get('yaw_dps', 0)} deg/s   imu {status.get('imu', 0)}")
         cv2.putText(img, info, (10, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.imshow("Omni Glasses rear camera (UDP 8103)", img)
+        cv2.imshow("Omni Glasses rear camera (UDP 4300)", img)
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
             break
     cv2.destroyAllWindows()

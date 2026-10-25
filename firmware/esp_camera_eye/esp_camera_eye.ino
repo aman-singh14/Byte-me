@@ -23,7 +23,7 @@
 // ---- this board ----------------------------------------------------------------
 #define DEVICE_NAME "eye"              // mDNS eye-cam.local, "role" in the UDP hello
 #define STREAM_MAX_FPS 25              // blinks need frame rate more than detail
-#define STREAM_PORT 8101       // this camera's live stream (eye 8101, front 8102, back 8103)
+#define STREAM_PORT 8101       // this camera's live stream (eye 8101, front 8102; back camera: UDP 4300)
 #define STREAM_SIZE FRAMESIZE_QVGA     // 320x240
 #define JPEG_QUALITY 12                // 10 (best) .. 63 (smallest)
 #define FLIP_VERTICAL 0                // set to 1 if the image is upside down in the mount

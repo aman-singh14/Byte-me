@@ -202,7 +202,7 @@ void main() {
   testWidgets('Settings shows the laptop address', (tester) async {
     await pump(tester, const SettingsScreen(), await filledLink(tester));
     expect(find.text('Laptop (backend)'), findsOneWidget);
-    expect(find.textContaining('172.20.10.2:8000 (typed in)'), findsOneWidget);
+    expect(find.textContaining('172.20.10.2:8001 (typed in)'), findsOneWidget);
   });
 
   for (final brightness in Brightness.values) {

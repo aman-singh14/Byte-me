@@ -1,32 +1,28 @@
-// esp_camera3: the BACK camera (AI-Thinker ESP32-CAM, OV2640, facing backward) + Tang Nano 20K FPGA.
-// Copied from fpga/FPGA/esp32cam_rear/esp32cam_rear.ino. Changed: this header comment, and UDP_PORT 4300 -> 8103.
-// The FPGA side is in fpga/ next to this file (omni_rear.v, omni_rear.cst, tuned_params.json) and the laptop
-// viewer in tools/rear_udp_viewer.py. The other cameras' sketches are in ../esp_camera_eye/ and ../esp_camera2_front/.
+// =============================================================================
+// esp32cam_rear.ino  -  Omni Glasses rear camera (AI Thinker ESP32-CAM, OV2640)
 //
-//   camera (640x480 B&W JPEG) --decode 1/8--> 80x60 grayscale --SPI--> Tang Nano 20K (fpga/omni_rear.v)
-//   FPGA status (SPI) --> tracking?   -> stream the JPEG frames over UDP 8103
-//                     --> COLLISION?  -> Grove buzzer beeps (held HORN_HOLD_MS)
-//   The FPGA ignores everything while the head turns > 90 deg/s (MPU6050 gyro on the FPGA).
+//   camera (640x480 B&W JPEG) --decode 1/8--> 80x60 grayscale --SPI--> Tang Nano 20K (omni_rear.v)
+//   FPGA status (SPI) --> tracking?  -> stream the JPEG frames over UDP 4300
+//                     --> COLLISION? -> Grove buzzer beeps (held HORN_HOLD_MS)
+//   The FPGA itself ignores everything while the head turns > 90 deg/s (MPU6050).
 //
-// Board: "AI Thinker ESP32-CAM" (esp32 core 3.x, PSRAM enabled). Partition scheme: Huge APP.
+// Arduino IDE: board "AI Thinker ESP32-CAM", esp32 core by Espressif, PSRAM enabled.
 //
 // Wiring (all grounds together):
 //   ESP32-CAM GPIO14 -> FPGA pin 73 (SPI SCK)      ESP32-CAM GPIO13 -> FPGA pin 53 (SPI MOSI)
 //   ESP32-CAM GPIO15 -> FPGA pin 72 (SPI CS)       ESP32-CAM GPIO2  <- FPGA pin 71 (SPI MISO)
 //   ESP32-CAM GPIO12 -> Grove Buzzer v1.2 SIG   (buzzer VCC -> 5V, GND -> GND, NC unconnected)
-//   MPU6050 SCL -> FPGA pin 30, SDA -> FPGA pin 31 (3.3 V, GND)
 //   Do not use the SD card. Unplug the GPIO2 wire while flashing the ESP32-CAM.
 //
-// Wi-Fi: joins "espholder" as a normal client (no access point). The name and password are in the
-// settings below (this sketch does not use secrets.h).
-// UDP 8103: status JSON is broadcast to everyone on that Wi-Fi. Video goes to every viewer that has
-// sent any packet to this ESP on port 8103 in the last 10 s (tools/rear_udp_viewer.py does that
-// automatically, up to MAX_VIEWERS); with no viewers it is broadcast instead.
+// Joins the existing Wi-Fi "espholder" (someone else's hotspot/router) as a normal client.
+// UDP 4300: status JSON is broadcast to everyone on that Wi-Fi. Video goes to every viewer
+// that has sent any packet to this ESP on port 4300 in the last 10 s (rear_udp_viewer.py does
+// that automatically, up to MAX_VIEWERS); with no viewers it is broadcast instead.
 //   video  : 16-byte header "OMNV" frame_id(u32) chunk(u16) chunks(u16) jpeg_len(u32), then <=1400 JPEG bytes
 //   status : JSON text, ~5 per second and on every change, e.g.
 //            {"t":"rear","seq":12,"tracking":1,"collision":0,"turning":0,"imu":1,"fpga":1,...}
 //   event  : {"t":"collision","seq":12} when a collision starts
-
+// =============================================================================
 #include <Arduino.h>
 #include "esp_camera.h"
 #include "jpeg_decoder.h"
@@ -39,7 +35,7 @@
 // ---------------- settings
 const char *WIFI_SSID = "espholder";
 const char *WIFI_PASS = "12345678";
-const uint16_t UDP_PORT = 8103;   // back camera stream + status (was 4300: the backend listens there for rear events)
+const uint16_t UDP_PORT = 4300;
 
 #define STREAM_FRAMESIZE FRAMESIZE_VGA   // 640x480 -> 80x60 exactly at 1/8 decode. FRAMESIZE_SVGA also works (resized)
 #define JPEG_QUALITY     12              // 10 = better picture, 20 = smaller/faster

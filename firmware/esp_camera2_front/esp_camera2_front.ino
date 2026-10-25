@@ -23,7 +23,7 @@
 // ---- this board ----------------------------------------------------------------
 #define DEVICE_NAME "front"            // mDNS front-cam.local, "role" in the UDP hello
 #define STREAM_MAX_FPS 5               // the backend analyses 2-5 fps; keep Wi-Fi bandwidth low
-#define STREAM_PORT 8102       // this camera's live stream (eye 8101, front 8102, back 8103)
+#define STREAM_PORT 8102       // this camera's live stream (eye 8101, front 8102; back camera: UDP 4300)
 #define STREAM_SIZE FRAMESIZE_QVGA     // 320x240
 #define JPEG_QUALITY 12                // 10 (best) .. 63 (smallest)
 #define FLIP_VERTICAL 0                // set to 1 if the image is upside down in the mount
