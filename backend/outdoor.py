@@ -7,7 +7,7 @@ sensor works: outdoors it uses a short exposure and low gain. So:
     scene brightness ~ mean_luma / (exposure_lines * gain)          (log10 below)
 
 The ESP32 serves the live exposure (AEC) and gain (AGC) at http://<front-cam>/sensor
-(firmware/esp32cam). Outdoors = brightness above a threshold for >= hold_s (60 s),
+(firmware/esp_camera_eye, firmware/esp_camera2_front). Outdoors = brightness above a threshold for >= hold_s (60 s),
 indoors again = below a lower threshold for >= hold_s (hysteresis). A blue, bright
 upper third (sky) lowers the threshold a little. Without fresh sensor data there is
 no outdoor call (raw luminance alone is not trusted).

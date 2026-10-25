@@ -83,6 +83,82 @@ class Calibration(TempCalibration):
         self.assertEqual(state["gaze"], "left")
 
 
+def shape_vector(cls, rng=None, same_position=True, noise=0.02):
+    """A position + shape reading (pupil.FEATURE_NAMES order) for a direction. With same_position the
+    centre of the dark mass is IDENTICAL for left and center: only the shape tells them apart."""
+    rng = rng or np.random.default_rng(0)
+    pos = {"left": (0.55, -0.55), "center": (0.55, -0.55), "right": (0.9, -0.4)} if same_position else \
+          {"left": (-0.02, -0.2), "center": (0.17, -0.56), "right": (0.44, -0.41)}
+    #          left_edge contrast core_area log(elong)
+    shape = {"left": (0.18, 0.49, 0.053, 1.3), "center": (0.34, 0.63, 0.092, 0.5), "right": (0.58, 0.58, 0.045, 0.46)}
+    x, y = pos[cls]
+    le, c, ca, el = shape[cls]
+    v = [x, y, le, c, ca, el, x, y]
+    return tuple(val + rng.normal(0, noise * max(abs(val), 0.1)) for val in v)
+
+
+def run_vector_steps(g, t=0.0, same_position=True):
+    rng = np.random.default_rng(1)
+    for region in ("left", "center", "right"):
+        for i in range(int(g.step_s * FPS) + 2):
+            g.update(shape_vector(region, rng, same_position), t)
+            t += 1 / FPS
+    return t
+
+
+class ShapeCalibration(TempCalibration):
+    def test_live_calibration_learns_shape_not_just_position(self):
+        g = GazeTracker(load_config())
+        g.start_calibration()
+        run_vector_steps(g, same_position=True)                    # left and center at the same spot
+        self.assertTrue(g.calibrated)
+        self.assertIsNotNone(g.scale)
+        self.assertEqual(len(g.scale), 8)
+        self.assertEqual(len(g.centroids["left"]), 8)
+        self.assertEqual(g.feature_names, tuple(__import__("backend.pupil", fromlist=["x"]).FEATURE_NAMES))
+        saved = distance.load_calibration()["gaze"][g.profile]
+        self.assertEqual(set(saved), {"left", "center", "right", "scale", "features"})
+        rng = np.random.default_rng(5)
+        for cls in ("left", "center", "right"):
+            for _ in range(20):
+                g.current = None
+                self.assertEqual(g.classify_raw(shape_vector(cls, rng)), cls)
+
+    def test_position_alone_could_not_have_done_it(self):
+        g = GazeTracker(load_config())
+        rng = np.random.default_rng(2)
+        g.centroids = {k: shape_vector(k, rng, True)[:2] for k in ("left", "center", "right")}
+        g.scale = None
+        wrong = 0
+        for _ in range(40):
+            g.current = None
+            wrong += g.classify_raw(shape_vector("left", rng)[:2]) != "left"
+        self.assertGreater(wrong, 5)                              # a coin flip between left and center
+
+    def test_every_feature_has_a_minimum_tolerance(self):
+        samples = {c: [shape_vector(c, np.random.default_rng(i), noise=0.0) for i in range(5)] for c in ("left", "center", "right")}
+        scale = GazeTracker.scale_from_samples(samples)           # zero wobble in the data
+        from backend.pupil import FEATURE_FLOORS
+        for got, floor in zip(scale, FEATURE_FLOORS):
+            self.assertGreaterEqual(got, floor)
+
+    def test_tolerates_a_reading_with_only_a_position(self):
+        g = GazeTracker(load_config())
+        g.start_calibration()
+        run_vector_steps(g, same_position=False)
+        g.current = None
+        self.assertEqual(g.classify_raw((0.17, -0.56)), "center")  # position only: falls back, no crash
+        g.current = None
+        self.assertEqual(g.classify_raw(shape_vector("right", same_position=False)), "right")
+
+    def test_old_position_only_profiles_still_load(self):
+        distance.save_calibration("gaze", {"me@closeup": {"left": [-0.3, 0.0], "center": [0.0, 0.0], "right": [0.3, 0.0]}})
+        g = GazeTracker(load_config())
+        self.assertTrue(g.calibrated)
+        self.assertIsNone(g.scale)
+        self.assertEqual(g.classify_raw((-0.28, 0.01)), "left")
+
+
 class Classification(TempCalibration):
     def tracker(self):
         g = GazeTracker(load_config())

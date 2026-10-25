@@ -64,6 +64,44 @@ class Pupil(unittest.TestCase):
             self.assertAlmostEqual(f.pupil[0], true_x(0.3), delta=0.03)
 
 
+class Lighting(unittest.TestCase):
+    """The pupil must stay found (and keep its position + shape numbers) in dim and bright rooms."""
+
+    def run_through(self, change):
+        from backend import eye_calibration as ec
+        ex = CloseupEye()
+        found = vec = 0
+        for i in range(30):
+            frame = synth_eye.render((0.3 * ((i // 10) - 1), 0), 1.0, rng=np.random.default_rng(i))
+            f = ex.extract(ec.change_lighting(frame, change) if change else frame)
+            found += f.pupil is not None
+            vec += f.vector is not None
+        return found, vec
+
+    def test_pupil_is_found_in_every_lighting(self):
+        for change in (None, "dim room (x0.4)", "bright room (x2)", "darker (x0.6)", "lower contrast", "warm light",
+                       "sensor noise", "shade from left"):
+            found, vec = self.run_through(change)
+            self.assertGreaterEqual(found, 28, f"{change}: pupil lost in {30 - found} of 30 frames")
+            self.assertGreaterEqual(vec, 28, f"{change}: no position+shape numbers in {30 - vec} frames")
+
+    def test_closed_eye_still_has_no_pupil_or_vector(self):
+        ex = CloseupEye()
+        for _ in range(20):
+            ex.extract(synth_eye.render((0, 0), 1.0))
+        f = ex.extract(synth_eye.render((0, 0), 0.0))
+        self.assertIsNone(f.pupil)
+        self.assertIsNone(f.vector)
+
+    def test_tracker_exposes_the_vector(self):
+        tracker = EyeTracker(load_config())
+        t = 0.0
+        for _ in range(30):
+            state, _ = tracker.process(synth_eye.render((0, 0), 1.0), t)
+            t += 1 / FPS
+        self.assertEqual(len(state["pupil_vector"]), 8)
+
+
 class BlinkFrames(unittest.TestCase):
     def feed(self, det, closed_frames):
         events, t = [], 0.0
