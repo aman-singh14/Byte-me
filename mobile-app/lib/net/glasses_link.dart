@@ -113,6 +113,21 @@ Uri? parseRelay(String input) {
   return Uri(scheme: u.scheme, host: u.host, port: u.hasPort ? u.port : null, path: path);
 }
 
+/// tools/cam_relay.py's hello, {"t":"relay_hello","port":8030,"key":"k"}, as the relay's address
+/// at [from] (the sender), or null if it isn't one.
+Uri? parseRelayHello(List<int> bytes, InternetAddress from) {
+  final Object? j;
+  try {
+    j = jsonDecode(utf8.decode(bytes));
+  } on FormatException {
+    return null;
+  }
+  if (j is! Map || j['t'] != 'relay_hello') return null;
+  final port = j['port'], key = j['key'];
+  if (port is! int || port <= 0 || port > 65535 || key is! String || key.isEmpty || key.contains('/')) return null;
+  return Uri(scheme: 'http', host: from.address, port: port, path: '/relay/$key');
+}
+
 class GlassesLink extends ChangeNotifier {
   /// [port] 0 picks free ports for everything (tests).
   GlassesLink({
@@ -204,16 +219,28 @@ class GlassesLink extends ChangeNotifier {
   /// The front camera board, once it said hello (else through the relay, if one is set).
   CameraBoard? get frontCam => _boards['front'] ?? _relayed['front'];
 
-  Uri? _relay;
+  Uri? _relay, _foundRelay;
+  DateTime? _foundRelayAt;
   var _relayed = const <String, CameraBoard>{};
 
   /// Where the eye and front cameras come from when they're on another network
-  /// (tools/cam_relay.py), or null. A board that says hello on the hotspot wins.
-  Uri? get relay => _relay;
+  /// (tools/cam_relay.py), or null: the relay saying hello on the hotspot, else the one typed
+  /// in Settings. A board that says hello on the hotspot wins over both.
+  Uri? get relay => _foundRelay ?? _relay;
 
+  /// The relay in use said hello (its address wasn't typed in).
+  bool get relayFound => _foundRelay != null;
+
+  /// The relay typed in Settings.
   set relay(Uri? base) {
     if (base == _relay) return;
     _relay = base;
+    _relayChanged();
+  }
+
+  void _relayChanged() {
+    final base = relay;
+    if (base == _relayed['eye']?.relay) return;
     _relayed = base == null ? const {} : {for (final r in ['eye', 'front']) r: CameraBoard.relayed(base, r)};
     notifyListeners();
   }
@@ -334,7 +361,16 @@ class GlassesLink extends ChangeNotifier {
   void _drainHello(RawDatagramSocket socket) {
     Datagram? d;
     while ((d = socket.receive()) != null) {
-      final hello = CamHello.parse(d!.data);
+      final found = parseRelayHello(d!.data, d.address);
+      if (found != null) {
+        _foundRelayAt = DateTime.now();
+        if (found != _foundRelay) {
+          _foundRelay = found;
+          _relayChanged();
+        }
+        continue;
+      }
+      final hello = CamHello.parse(d.data);
       if (hello == null) continue;
       final board = CameraBoard(d.address, hello);
       _boardHeard[hello.role] = DateTime.now();
@@ -459,6 +495,11 @@ class GlassesLink extends ChangeNotifier {
         _boardHeard.remove(role);
       }
       notifyListeners();
+    }
+    final relayAt = _foundRelayAt;
+    if (_foundRelay != null && relayAt != null && now.difference(relayAt) > boardTimeout) {
+      _foundRelay = null; // the relay stopped: back to the typed one, if any
+      _relayChanged();
     }
     final back = _lastBackAt;
     if (_backStatus != null && back != null && now.difference(back) > backTimeout) {

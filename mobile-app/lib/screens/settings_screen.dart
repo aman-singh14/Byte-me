@@ -262,7 +262,11 @@ class _CameraRelayTile extends StatelessWidget {
     return ListTile(
       leading: const Icon(Symbols.cloud_sync_rounded),
       title: const Text('Cameras on another network'),
-      subtitle: Text(relay == null ? 'Off' : '${relay.authority}${relay.path}'),
+      subtitle: Text(
+        relay == null
+            ? 'Off · a laptop running tools/cam_relay.py on the hotspot is found by itself'
+            : '${relay.authority}${relay.path}${link.relayFound ? ' (found automatically)' : ''}',
+      ),
       trailing: const Icon(Symbols.edit_rounded),
       onTap: () => _edit(context, link),
     );

@@ -23,7 +23,8 @@ nothing is saved. Every 5 s it prints what each camera is sending.
 camera instead of a board, cropped to 4:3 like the boards (the app's distances assume it):
 
     .venv/bin/python tools/cam_relay.py --front webcam --front-fps 15 --serve 8030 --key k
-    # laptop on the phone's hotspot: http://172.20.10.x:8030/relay/k in the app
+    # laptop on the phone's hotspot (Wi-Fi or USB cable): the app finds it by itself, from the
+    # hello the relay sends the phone every 2 s; or type http://172.20.10.x:8030/relay/k
 
 --front-depth runs a depth model on this laptop (Depth Anything V2, metric indoor; needs
 `pip install transformers`, ~100 MB downloaded the first time) on the front frames, and sends the
@@ -151,18 +152,39 @@ def webcam_jpegs(index, height, quality):
     and [height] lines high."""
     import cv2
 
-    cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
-        raise OSError(f"can't open webcam {index} (allow Camera for your terminal in System Settings > "
-                      "Privacy & Security > Camera)")
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_FPS, 30)
+    # Open, read and release on a thread of its own: a webcam that's unplugged can hang read(),
+    # release() or opening it again forever. No frame for 5 s -> give up on that thread, and the
+    # caller tries again with a new one (it comes back when it's plugged back in).
+    latest, got, stop, failed = [None], threading.Event(), threading.Event(), [None]
+
+    def read():
+        cap = cv2.VideoCapture(index)
+        try:
+            if not cap.isOpened():
+                failed[0] = (f"can't open webcam {index} (unplugged? or allow Camera for your terminal "
+                             "in System Settings > Privacy & Security > Camera)")
+                return
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            while not stop.is_set():
+                ok, img = cap.read()
+                if not ok:
+                    failed[0] = f"webcam {index} stopped sending (unplugged?)"
+                    return
+                latest[0] = img
+                got.set()
+        finally:
+            cap.release()
+            got.set()
+
+    threading.Thread(target=read, daemon=True).start()
     try:
         while True:
-            ok, img = cap.read()
-            if not ok:
-                raise OSError(f"webcam {index} stopped")
+            if not got.wait(5) or failed[0] or latest[0] is None:
+                raise OSError(failed[0] or f"webcam {index} stopped sending (unplugged?)")
+            got.clear()
+            img = latest[0]
             h, w = img.shape[:2]
             cw = min(w, h * 4 // 3)
             img = img[:, (w - cw) // 2:(w + cw) // 2]
@@ -170,7 +192,7 @@ def webcam_jpegs(index, height, quality):
                 img = cv2.resize(img, (height * 4 // 3, height), interpolation=cv2.INTER_AREA)
             yield cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
     finally:
-        cap.release()
+        stop.set()
 
 
 def check_webcam(index):
@@ -293,6 +315,39 @@ def push(cam, fps, base, key):
             time.sleep(2)
 
 
+def hello(port, key, phone="172.20.10.1", every=2.0):
+    """Tells the phone app where the relay is, like the camera boards' hellos: UDP to its port
+    4310 (it's always 172.20.10.1 on its own hotspot, over Wi-Fi or the USB cable). The app takes
+    the address from the sender, so it never has to be typed in."""
+    import socket
+
+    msg = json.dumps({"t": "relay_hello", "port": port, "key": key}).encode()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    said = None
+    while True:
+        # Without an address on the hotspot the hello still "sends" (out the other Wi-Fi), and the
+        # phone never hears it: say so.
+        if not any(a.startswith("172.20.10.") for a in local_addresses()):
+            if said != "off":
+                print("hello: this laptop isn't on the phone's hotspot, so the phone can't see these "
+                      "cameras. Join the hotspot's Wi-Fi, or (Wi-Fi on a camera) check that iPhone USB "
+                      "has a 172.20.10.x address: networksetup -getinfo \"iPhone USB\"", flush=True)
+                said = "off"
+            time.sleep(every)
+            continue
+        if said == "off":
+            print("hello: on the phone's hotspot now", flush=True)
+            said = None
+        try:
+            sock.sendto(msg, (phone, 4310))
+            said = None
+        except OSError as e:  # not on the phone's hotspot (yet)
+            if said != str(e):
+                print(f"hello: can't reach the phone at {phone}: {e}; retrying", flush=True)
+                said = str(e)
+        time.sleep(every)
+
+
 def report(cams):
     while True:
         time.sleep(5)
@@ -388,6 +443,7 @@ def main():
         threading.Thread(target=depth, args=(front, a.depth_fps), daemon=True).start()
     threading.Thread(target=report, args=(cams,), daemon=True).start()
     if a.serve:
+        threading.Thread(target=hello, args=(a.serve, a.key), daemon=True).start()
         asyncio.run(serve(cams, rates, a.serve, a.key))
     else:
         for cam in cams:

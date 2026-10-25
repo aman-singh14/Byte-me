@@ -153,6 +153,22 @@ void main() {
       expect((link.frontCam, link.eyeCam), (null, null));
     });
 
+    test("a relay's hello is used at whatever address it has, over the typed one, until it stops", () async {
+      link.relay = parseRelay('http://172.20.10.2:8030/relay/k'); // typed in Settings
+      toHello('{"t":"relay_hello","port":8030,"key":"k"}');
+      await wait(100);
+      expect(link.relay.toString(), 'http://127.0.0.1:8030/relay/k'); // the sender's address
+      expect(link.relayFound, isTrue);
+      expect(link.eyeCam?.video.toString(), 'http://127.0.0.1:8030/relay/k/eye/stream');
+      for (final bad in ['{"t":"relay_hello","port":0,"key":"k"}', '{"t":"relay_hello","port":8030,"key":"a/b"}', 'nope']) {
+        expect(parseRelayHello(utf8.encode(bad), InternetAddress.loopbackIPv4), isNull, reason: bad);
+      }
+      await wait(400); // no more hellos: back to the typed address
+      expect(link.relay.toString(), 'http://172.20.10.2:8030/relay/k');
+      expect(link.relayFound, isFalse);
+      link.relay = null;
+    });
+
     test("the back camera's reports connect the link; collisions fire from behind; turns count", () async {
       final fires = <FireMessage>[], turns = <double>[];
       link.fires.listen(fires.add);
