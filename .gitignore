@@ -4,7 +4,8 @@ recordings/
 vectors/
 backend/data/
 backend/models/
-firmware/esp32cam/secrets.h
+firmware/*/secrets.h
 *.pyc
 .env
 backend/tests/data/
+.DS_Store

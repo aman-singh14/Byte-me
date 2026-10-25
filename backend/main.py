@@ -200,8 +200,8 @@ class Runtime:
             self.emit("low_blink_end", lb[1], t)
         self._update_live(low_blink=self.low_blink.active, low_blink_since=self.low_blink.since
                           if self.low_blink.active else None)
-        pupil = state.get("pupil")
-        self._update_live(**self.gaze.update(tuple(pupil) if pupil else None, t))
+        reading = state.get("pupil_vector") or state.get("pupil")        # position + shape when we have it
+        self._update_live(**self.gaze.update(tuple(reading) if reading else None, t))
         brk = self.session.update(state["eye_detected"], t)
         if brk:
             self.emit("break", {"duration_s": brk[1]}, t)

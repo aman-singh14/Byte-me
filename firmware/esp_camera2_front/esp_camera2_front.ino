@@ -1,17 +1,17 @@
-// Camera firmware for the AI-Thinker ESP32-CAM (OV2640): EYE or FRONT camera.
+// esp_camera2: the FRONT camera (AI-Thinker ESP32-CAM, OV2640, facing forward).
 // It only streams; all processing happens in the backend on the laptop.
+// The other camera's sketch is in ../esp_camera_eye/.
 //
-//   http://<ip>:81/stream               MJPEG, 320x240 (EYE up to 25 fps, FRONT capped at 5 fps)
+//   http://<ip>:8102/stream              MJPEG, 320x240, up to 5 fps
 //   http://<ip>/capture?size=vga|svga   one JPEG at 640x480 / 800x600, on demand (then back to 320x240)
 //   http://<ip>/sensor                  live auto-exposure (AEC) and gain (AGC), for outdoor detection
 //   http://<ip>/status                  role, IP, RSSI, uptime, frames sent
-//   UDP hello to port 4310 every 2 s    {"t":"cam_hello","role":"eye","ip":"172.20.10.3",...}
+//   UDP hello to port 4310 every 2 s    {"t":"cam_hello","role":"front","ip":"192.168.x.x",...}
 //
-// Wi-Fi: station mode only (no access point). It joins the phone hotspot in secrets.h,
-// reconnects if the hotspot drops and prints its IP over serial at boot.
+// Wi-Fi: station mode only (no access point). It joins the network in secrets.h ("espholder"),
+// reconnects if it drops and prints its IP over serial at boot.
 //
-// Before flashing: cp secrets.example.h secrets.h (hotspot name/password), set DEVICE_ROLE.
-// Board: "AI Thinker ESP32-CAM" (esp32 core 2.x or 3.x).
+// Board: "AI Thinker ESP32-CAM" (esp32 core 2.x or 3.x). Partition scheme: Huge APP.
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -20,18 +20,10 @@
 #include "esp_http_server.h"
 #include "secrets.h"   // WIFI_SSID, WIFI_PASSWORD, optional BACKEND_HOST (gitignored)
 
-// ---- per-device settings ----------------------------------------------------
-#define ROLE_EYE 1
-#define ROLE_FRONT 2
-#define DEVICE_ROLE ROLE_EYE           // ROLE_EYE or ROLE_FRONT
-
-#if DEVICE_ROLE == ROLE_EYE
-#define DEVICE_NAME "eye"              // mDNS eye-cam.local
-#define STREAM_MAX_FPS 25              // blinks need frame rate more than detail
-#else
-#define DEVICE_NAME "front"            // mDNS front-cam.local
-#define STREAM_MAX_FPS 5               // the backend analyses 2-5 fps; keep hotspot bandwidth low
-#endif
+// ---- this board ----------------------------------------------------------------
+#define DEVICE_NAME "front"            // mDNS front-cam.local, "role" in the UDP hello
+#define STREAM_MAX_FPS 5               // the backend analyses 2-5 fps; keep Wi-Fi bandwidth low
+#define STREAM_PORT 8102       // this camera's live stream (eye 8101, front 8102, back 8103)
 #define STREAM_SIZE FRAMESIZE_QVGA     // 320x240
 #define JPEG_QUALITY 12                // 10 (best) .. 63 (smallest)
 #define FLIP_VERTICAL 0                // set to 1 if the image is upside down in the mount
@@ -193,8 +185,8 @@ static void start_servers() {
     httpd_register_uri_handler(control_httpd, &sensor_uri);
     httpd_register_uri_handler(control_httpd, &status_uri);
   }
-  // The stream gets its own server (port 81) so a long-lived stream never blocks the others.
-  config.server_port = 81;
+  // The stream gets its own server (STREAM_PORT) so a long-lived stream never blocks the others.
+  config.server_port = STREAM_PORT;
   config.ctrl_port += 1;
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
   if (httpd_start(&stream_httpd, &config) == ESP_OK) {
@@ -281,9 +273,9 @@ static void connect_wifi() {
 static void send_hello() {
   char msg[160];
   int n = snprintf(msg, sizeof(msg),
-                   "{\"t\":\"cam_hello\",\"role\":\"%s\",\"ip\":\"%s\",\"stream_port\":81,\"http_port\":80,"
+                   "{\"t\":\"cam_hello\",\"role\":\"%s\",\"ip\":\"%s\",\"stream_port\":%d,\"http_port\":80,"
                    "\"max_fps\":%d}",
-                   DEVICE_NAME, WiFi.localIP().toString().c_str(), STREAM_MAX_FPS);
+                   DEVICE_NAME, WiFi.localIP().toString().c_str(), STREAM_PORT, STREAM_MAX_FPS);
   udp.beginPacket(IPAddress(255, 255, 255, 255), HELLO_PORT);
   udp.write((const uint8_t *)msg, n);
   udp.endPacket();
@@ -311,11 +303,11 @@ void setup() {
   connect_wifi();
   if (MDNS.begin(DEVICE_NAME "-cam")) {
     MDNS.addService("http", "tcp", 80);
-    Serial.printf("mDNS: http://%s-cam.local:81/stream\n", DEVICE_NAME);
+    Serial.printf("mDNS: http://%s-cam.local:%d/stream\n", DEVICE_NAME, STREAM_PORT);
   }
   start_servers();
   udp.begin(HELLO_PORT);
-  Serial.printf("stream:  http://%s:81/stream\n", WiFi.localIP().toString().c_str());
+  Serial.printf("stream:  http://%s:%d/stream\n", WiFi.localIP().toString().c_str(), STREAM_PORT);
 }
 
 void loop() {

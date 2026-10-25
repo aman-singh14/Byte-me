@@ -1,8 +1,8 @@
 """ESP32-CAM discovery on the phone hotspot.
 
-Each camera broadcasts a hello every 2 s (firmware/esp32cam):
+Each camera broadcasts a hello every 2 s (firmware/esp_camera_eye, firmware/esp_camera2_front):
 
-    {"t": "cam_hello", "role": "eye" | "front", "ip": "172.20.10.3", "stream_port": 81, "http_port": 80}
+    {"t": "cam_hello", "role": "eye" | "front", "ip": "172.20.10.3", "stream_port": 8101, "http_port": 80}
 
 on UDP port 4310. Stream URL order for a camera: the IP it announced (if heard in the
 last `fresh_s`), then the configured URL (an mDNS name like eye-cam.local, which iPhone
@@ -78,7 +78,7 @@ class CameraDirectory:
         if isinstance(cam.get("source"), str):
             out.append(cam["source"])
         if cam.get("static_ip"):
-            out.append(f"http://{cam['static_ip']}:81/stream")
+            out.append(f"http://{cam['static_ip']}:{cam.get('stream_port', 81)}/stream")
         return list(dict.fromkeys(out))
 
     def stream_url(self, role, now=None):

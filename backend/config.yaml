@@ -14,17 +14,20 @@
 
 cameras:
   eye:
-    source: "http://eye-cam.local:81/stream"
+    source: "http://eye-cam.local:8101/stream"
+    stream_port: 8101     # EYE live stream (firmware/esp_camera_eye)
     static_ip: null       # e.g. 172.20.10.3 if mDNS doesn't resolve on the hotspot (the hello usually makes this unnecessary)
     fallback: null
     fps: 25               # 320x240 at ~20-25 fps: frame rate matters more than detail for blinks
   front:
-    source: "http://front-cam.local:81/stream"
+    source: "http://front-cam.local:8102/stream"
+    stream_port: 8102     # FRONT live stream (firmware/esp_camera2_front)
     static_ip: null
     fallback: null
     fps: 3                # 320x240 stream, analysed 2-5 times a second (YOLO near-work + brightness)
     still_size: vga       # one /capture?size=vga|svga still, on demand only (for Muse)
-  # The rear camera does not stream: it arrives as FPGA events (rear.mode: fpga).
+  # BACK camera (firmware/esp_camera3_back): UDP 8103, its own video + status format; the backend does
+  # not read it yet. Here the rear camera arrives as FPGA events (rear.mode: fpga, UDP 4300).
   # For rear.mode: software, add  rear: {source: "<MJPEG URL>"}
 
 discovery:
@@ -49,6 +52,7 @@ eye:
   blink_max_s: 0.45       # (at 20-25 fps that is 2..11 frames; longer = eyes shut, not a blink)
   blink_min_frames: null  # set both to count blinks in frames instead of seconds
   blink_max_frames: null
+  pupil_locator: mass     # gaze position from the blurry-frame locator (backend/pupil.py); "blob" = round-blob finder
   presence_s: 2.0         # no pupil for longer than this = eye not in view (not a closed eye)
   partial_ratio: 0.85     # partial blink: lid dips below this (but not below blink_ratio), blink-length
   low_blink_per_min: 10   # flag a low-blink stretch: under this rate...
@@ -112,6 +116,8 @@ gaze:                     # backend/gaze.py: LEFT / CENTER / RIGHT from the pupi
   settle_s: 0.5           # skip the start of each step while the eye moves
   smoothing_s: 0.5        # majority vote over this window
   hysteresis: 0.15        # switch only if clearly closer (fraction of the left-right span)
+  y_weight: 1.0           # up/down counts as much as left/right (the real eye camera is below the eye,
+                          # so looking left also moves the pupil down: left vs center differ mostly in y)
   front_mirrored: false   # the FRONT camera faces where the wearer faces (dev webcam: true)
   regions:                # FRONT frame columns per gaze region (0 = left edge, 1 = right), ~15% overlap
     left: [0.0, 0.41]

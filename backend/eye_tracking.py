@@ -27,6 +27,9 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from backend.eye_state import lid_features, load_model as load_lid_model
+from backend.pupil import locate
+
 # Face Mesh indexes. "Right"/"left" are the subject's.
 RIGHT_EYE = (33, 160, 158, 133, 153, 144)    # p1 outer corner, p2 p3 upper lid, p4 inner corner, p5 p6 lower lid
 LEFT_EYE = (362, 385, 387, 263, 373, 380)
@@ -38,6 +41,7 @@ class EyeFeatures:
     openness: float              # EAR (facemesh) or pupil h/w (closeup); 0 = closed
     pupil: tuple | None = None   # (x, y) in -1..1: x + = toward the subject's left, y + = down
     points: np.ndarray | None = None   # pixel points to draw
+    vector: tuple | None = None  # position + shape of the pupil mass (pupil.FEATURE_NAMES), closeup/mass only
 
 
 def ear(pts, idx):
@@ -97,6 +101,12 @@ class FaceMeshEyes:
         return EyeFeatures(e, pupil, draw)
 
 
+# Openness handed to BlinkSquintDetector for each calibrated lid state: 1 = open, squint sits in its
+# 0.65-0.85 band, closed is below the blink threshold.
+LID_OPENNESS = {"open": 1.0, "squint": 0.75, "closed": 0.0}
+NORM_LOW, NORM_RANGE = 40.0, 141.0      # where the 2nd..98th percentile of every frame is mapped (the test eye's own range)
+
+
 class CloseupEye:
     """THE PRODUCT's eye method: EYE ESP32-CAM ~3 cm from one eye, below and to the side.
 
@@ -120,7 +130,17 @@ class CloseupEye:
     name = "closeup"
 
     def __init__(self, dark_offset=22, dark_percentile=1.0, min_area_frac=0.002, max_area_frac=0.2,
-                 min_circularity=0.55, ref_window=600):
+                 min_circularity=0.55, ref_window=600, locator="mass", lid_model=None):
+        # locator: where the pupil POSITION (used for gaze) comes from. "mass" = backend/pupil.py,
+        # made for the blurry real eye camera and independent of lighting; "blob" = the round-blob
+        # finder below, which suits crisp, well-lit pupils. Blink/openness always use the blob logic.
+        if locator not in ("mass", "blob"):
+            raise ValueError("locator must be mass or blob")
+        self.locator = locator
+        # Optional calibrated eyelid model (backend/eye_state.py): open / squint / closed from the shape of
+        # the dark mass. Without it openness comes from the pupil blob's area, as before.
+        self.lid_model = lid_model
+        self.lid_state = None
         self.dark_offset = dark_offset
         self.dark_percentile = dark_percentile
         self.min_area_frac = min_area_frac
@@ -167,7 +187,35 @@ class CloseupEye:
         return out, thresh
 
     def extract(self, frame):
+        """The round-blob logic decides whether a pupil is visible at all and how open the eye is
+        (blinks); the pupil locator supplies where it is and what shape the visible dark mass has
+        (gaze). A frame with no visible pupil stays a closed/absent eye, as before.
+        With a calibrated lid model, the eyelid shape decides open / squint / closed instead."""
+        blob = self._extract_blob(frame)
+        lid_open = False
+        if self.lid_model is not None:
+            vec = lid_features(frame)
+            self.lid_state = self.lid_model.state(vec) if vec is not None else None
+            if self.lid_state in ("squint", "closed"):
+                return EyeFeatures(LID_OPENNESS[self.lid_state], None, blob.points)    # no pupil to follow
+            lid_open = self.lid_state == "open"
+            if lid_open:
+                blob = EyeFeatures(LID_OPENNESS["open"], blob.pupil, blob.points)
+        if self.locator != "mass" or (blob.pupil is None and not lid_open):
+            return blob
+        fix = locate(frame)
+        if fix is None:
+            return blob
+        return EyeFeatures(blob.openness, fix.as_signed(), blob.points, tuple(fix.vector()))
+
+    def _extract_blob(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        # Stretch the frame's own brightness range (2nd-98th percentile) onto a fixed one, so the fixed
+        # thresholds below (darkness offset, learned pupil level) mean the same in a dim room as in a
+        # bright one. On the well-lit test eye this is close to the identity.
+        lo, hi = np.percentile(gray, [2, 98])
+        gray = np.clip((gray.astype(np.float32) - lo) * (NORM_RANGE / max(hi - lo, 30.0)) + NORM_LOW,
+                       0, 255).astype(np.uint8)
         gray = cv2.medianBlur(gray, 5)
         h, w = gray.shape
         roi = (0, 0, w, h)
@@ -402,7 +450,8 @@ class EyeTracker:
         e = cfg.get("eye", {})
         if extractor is None:
             extractor = (FaceMeshEyes(eye=e.get("facemesh_eye", "both")) if e.get("method") == "facemesh"
-                         else CloseupEye())
+                         else CloseupEye(locator=e.get("pupil_locator", "mass"),
+                                         lid_model=load_lid_model(e.get("user", "me"), "closeup")))
         self.extractor = extractor
         self.detector = BlinkSquintDetector(**e)
         self.presence_s = e.get("presence_s", 2.0)
@@ -438,6 +487,7 @@ class EyeTracker:
             "blink_rate": None if rate is None else round(rate, 1),
             "squinting": d.squinting,
             "pupil": None if f is None or f.pupil is None else [round(v, 3) for v in f.pupil],
+            "pupil_vector": None if f is None or f.vector is None else [round(v, 4) for v in f.vector],
             "method": self.extractor.name,
         }
         return self.state, events
