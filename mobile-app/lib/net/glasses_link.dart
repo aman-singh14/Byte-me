@@ -21,7 +21,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../vision/mjpeg.dart';
 import '../vision/udp_camera.dart';
 import 'protocol.dart';
 
@@ -51,27 +53,58 @@ class DeviceAddress {
   String toString() => '${address.address}:$port';
 }
 
-/// A camera board that said hello on [camHelloPort].
+/// A camera board that said hello on [camHelloPort], or one on another network
+/// whose frames come through a relay (tools/cam_relay.py, cloud/relay.py).
 class CameraBoard {
-  const CameraBoard(this.address, this.hello);
-  final InternetAddress address;
+  const CameraBoard(InternetAddress this.address, this.hello) : relay = null;
+
+  /// [role]'s camera at [relay] (e.g. `https://omni-glasses.fly.dev/relay/KEY`): MJPEG only, no /sensor.
+  CameraBoard.relayed(Uri this.relay, String role) : address = null, hello = CamHello(role: role, udp: false);
+
+  /// Null for a relayed board.
+  final InternetAddress? address;
   final CamHello hello;
+  final Uri? relay;
 
-  /// Its video over UDP (WANT / CAMV chunks).
-  Uri get video => Uri.parse('udp://${address.address}:${hello.streamPort}');
+  Uri _relayed(String what) => relay!.replace(path: '${relay!.path}/${hello.role}/$what');
 
-  /// One still at [size] (qvga, vga, svga, ...), over HTTP.
-  Uri capture([String size = 'vga']) => Uri.parse('http://${address.address}:${hello.httpPort}/capture?size=$size');
+  /// Its video: UDP (WANT / CAMV chunks), or MJPEG over HTTP.
+  Uri get video => relay != null
+      ? _relayed('stream')
+      : Uri.parse('${hello.udp ? 'udp' : 'http'}://${address!.address}:${hello.streamPort}${hello.udp ? '' : '/stream'}');
+
+  /// One still at [size] (qvga, vga, svga, ...), over HTTP. A relay has only the newest frame.
+  Uri capture([String size = 'vga']) =>
+      relay != null ? _relayed('capture') : Uri.parse('http://${address!.address}:${hello.httpPort}/capture?size=$size');
+
+  /// The front board's exposure and gain (for outside time); a relay has none.
+  Uri? get sensor => relay != null ? null : Uri.parse('http://${address!.address}:${hello.httpPort}/sensor');
+
+  /// A live feed of its video.
+  CameraFeed open() => hello.udp && address != null ? UdpCamera(address!, hello.streamPort) : RearCamera(video);
 
   @override
   bool operator ==(Object other) =>
       other is CameraBoard &&
       other.address == address &&
+      other.relay == relay &&
+      other.hello.role == hello.role &&
       other.hello.streamPort == hello.streamPort &&
       other.hello.httpPort == hello.httpPort;
 
   @override
-  int get hashCode => Object.hash(address, hello.streamPort, hello.httpPort);
+  int get hashCode => Object.hash(address, relay, hello.role, hello.streamPort, hello.httpPort);
+}
+
+const _relayPref = 'camera_relay';
+
+/// A camera relay address as typed in Settings (http(s)://host[:port]/relay/KEY), or null.
+Uri? parseRelay(String input) {
+  final u = Uri.tryParse(input.trim());
+  final path = u?.path.replaceAll(RegExp(r'/+$'), '') ?? '';
+  if (u == null || !(u.isScheme('http') || u.isScheme('https')) || u.host.isEmpty) return null;
+  if (!RegExp(r'^/relay/[^/]+$').hasMatch(path)) return null;
+  return Uri(scheme: u.scheme, host: u.host, port: u.hasPort ? u.port : null, path: path);
 }
 
 class GlassesLink extends ChangeNotifier {
@@ -159,11 +192,41 @@ class GlassesLink extends ChangeNotifier {
   final _boards = <String, CameraBoard>{};
   final _boardHeard = <String, DateTime>{};
 
-  /// The eye camera board, once it said hello.
-  CameraBoard? get eyeCam => _boards['eye'];
+  /// The eye camera board, once it said hello (else through the relay, if one is set).
+  CameraBoard? get eyeCam => _boards['eye'] ?? _relayed['eye'];
 
-  /// The front camera board, once it said hello.
-  CameraBoard? get frontCam => _boards['front'];
+  /// The front camera board, once it said hello (else through the relay, if one is set).
+  CameraBoard? get frontCam => _boards['front'] ?? _relayed['front'];
+
+  Uri? _relay;
+  var _relayed = const <String, CameraBoard>{};
+
+  /// Where the eye and front cameras come from when they're on another network
+  /// (tools/cam_relay.py), or null. A board that says hello on the hotspot wins.
+  Uri? get relay => _relay;
+
+  set relay(Uri? base) {
+    if (base == _relay) return;
+    _relay = base;
+    _relayed = base == null ? const {} : {for (final r in ['eye', 'front']) r: CameraBoard.relayed(base, r)};
+    notifyListeners();
+  }
+
+  /// The relay saved in Settings, if any.
+  Future<void> loadRelay() async {
+    final saved = (await SharedPreferences.getInstance()).getString(_relayPref);
+    if (saved != null) relay = parseRelay(saved);
+  }
+
+  /// Uses and remembers the relay at [input] (empty: none). False if it isn't a relay address.
+  Future<bool> saveRelay(String input) async {
+    final base = parseRelay(input);
+    if (base == null && input.trim().isNotEmpty) return false;
+    relay = base;
+    final p = await SharedPreferences.getInstance();
+    await (base == null ? p.remove(_relayPref) : p.setString(_relayPref, base.toString()));
+    return true;
+  }
 
   DeviceAddress? _backCam;
 

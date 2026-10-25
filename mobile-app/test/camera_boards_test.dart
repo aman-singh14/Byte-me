@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_glasses/alerts/phone_buzzer.dart';
 import 'package:omni_glasses/net/glasses_link.dart';
 import 'package:omni_glasses/net/protocol.dart';
+import 'package:omni_glasses/vision/mjpeg.dart';
 import 'package:omni_glasses/vision/udp_camera.dart';
 
 Future<void> wait(int ms) => Future.delayed(Duration(milliseconds: ms));
@@ -123,6 +124,32 @@ void main() {
       expect(link.frontCam?.capture().toString(), 'http://127.0.0.1:8182/capture?size=vga');
       expect(link.eyeCam?.hello.streamPort, 81);
       await wait(400); // no more hellos: the boards are gone (Ask goes back to the phone's camera)
+      expect((link.frontCam, link.eyeCam), (null, null));
+    });
+
+    test('cameras on another network come through the relay; a board on the hotspot wins', () async {
+      expect(parseRelay(' https://omni-glasses.fly.dev/relay/k3y/ ').toString(), 'https://omni-glasses.fly.dev/relay/k3y');
+      expect(parseRelay('http://100.64.0.2:8030/relay/k').toString(), 'http://100.64.0.2:8030/relay/k');
+      for (final bad in ['', 'omni-glasses.fly.dev/relay/k', 'https://omni-glasses.fly.dev', 'ftp://x/relay/k']) {
+        expect(parseRelay(bad), isNull, reason: bad);
+      }
+      var changes = 0;
+      link.addListener(() => changes++);
+      link.relay = parseRelay('https://omni-glasses.fly.dev/relay/k3y');
+      expect(changes, 1);
+      expect(link.eyeCam?.video.toString(), 'https://omni-glasses.fly.dev/relay/k3y/eye/stream');
+      expect(link.frontCam?.capture().toString(), 'https://omni-glasses.fly.dev/relay/k3y/front/capture');
+      expect(link.frontCam?.sensor, isNull); // no exposure numbers through a relay: no outside time
+      final feed = link.eyeCam!.open();
+      expect(feed, isA<RearCamera>());
+      feed.dispose();
+      toHello('{"t":"cam_hello","role":"front","stream":"udp","stream_port":8102,"http_port":8182}');
+      await wait(100);
+      expect(link.frontCam?.video.toString(), 'udp://127.0.0.1:8102');
+      expect(link.eyeCam?.relay, isNotNull);
+      await wait(400); // the hotspot board is gone: back to the relay
+      expect(link.frontCam?.relay, isNotNull);
+      link.relay = null;
       expect((link.frontCam, link.eyeCam), (null, null));
     });
 

@@ -9,6 +9,7 @@ at one HTTPS address. With it, the app works on cellular or any Wi-Fi, with no l
 | Call a helper | `/rooms`, `/h/{room}`, `/ws/wearer/{room}`, `/ws/helper/{room}`, `/livekit-token` | `backend/helper.py` |
 | Live captions | `WS /ws/captions` | `backend/captions.py` |
 | Muse image questions (social-tap check, describe, Ask with a phone photo) | `POST /vlm/{feature}` | `backend/vlm.py` |
+| Camera relay (eye and front boards on another Wi-Fi) | `WS /relay/{key}/push/{role}`, `/relay/{key}/{role}/stream`, `/relay/{key}/{role}/capture` | `cloud/relay.py` |
 
 The laptop backend (`backend/main.py`) still does everything that needs the glasses'
 cameras: eye tracking, near-work, rings, rear events and "Ask".
@@ -21,7 +22,7 @@ the app or the image (`.dockerignore` leaves `.env` out).
 - **Captions:** `CAPTIONS_DAILY_MINUTES`, default 120 a day (about $0.36), plus 4 sessions at once. The count is kept in memory, so a restart starts it over.
 - **Helper rooms:** they cost nothing here. LiveKit counts call minutes against its own free allowance.
 
-**Privacy:** nothing new is stored. Together keeps what it always did. Frames, audio and captions only pass through. Logs are warnings only, because helper links carry room tokens and uvicorn's normal logs include every URL.
+**Privacy:** nothing new is stored. Together keeps what it always did. Frames, audio and captions only pass through; the camera relay holds only each camera's newest frame, in memory. Logs are warnings only, because helper links carry room tokens and uvicorn's normal logs include every URL.
 
 ## Run it locally
 
@@ -69,6 +70,13 @@ Send the keys from `.env` as secrets. The values go to Fly, not into the image:
 
 ```bash
 fly secrets import < .env
+```
+
+For the camera relay, also set a long random key (without it the relay is off). Keep it:
+it goes into the relay command and the app's Settings:
+
+```bash
+fly secrets set RELAY_KEY=$(openssl rand -hex 16)
 ```
 
 Then deploy:

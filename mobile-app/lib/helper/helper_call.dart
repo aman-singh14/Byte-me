@@ -29,7 +29,6 @@ import '../net/protocol.dart';
 import '../vision/mjpeg.dart';
 import '../vision/phone_camera.dart';
 import '../vision/rear_vision.dart';
-import '../vision/udp_camera.dart';
 import 'helper_audio.dart';
 
 /// Where the helper server is: the cloud server (CLOUD_URL) if the app has one.
@@ -150,11 +149,8 @@ class GlassesCameras implements HelperCameras {
   @override
   bool get glasses => vision.camera != null || vision.link.frontCam != null;
 
-  /// The front camera board's UDP video, or the MJPEG stream.
-  CameraFeed _openFront() {
-    final board = vision.link.frontCam;
-    return board == null ? RearCamera(front) : UdpCamera(board.address, board.hello.streamPort);
-  }
+  /// The front camera board's video, or the MJPEG stream.
+  CameraFeed _openFront() => vision.link.frontCam?.open() ?? RearCamera(front);
 
   @override
   ValueListenable<Uint8List?>? open(HelperCamera which) => switch (which) {

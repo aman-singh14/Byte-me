@@ -53,7 +53,7 @@ class CloudTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.muse = FakeMuse()
         with mock.patch.dict(os.environ, {"CAPTIONS_DAILY_MINUTES": minutes}):
-            return TestClient(create_app(tmp.name, make_upstream=Silent, muse=self.muse))
+            return TestClient(create_app(tmp.name, make_upstream=Silent, muse=self.muse, relay_key="k3y"))
 
     def test_together_and_helper_share_the_address(self):
         c = self.client()
@@ -83,6 +83,33 @@ class CloudTest(unittest.TestCase):
             ws.send_json({"type": "start"})
             self.assertEqual(ws.receive_json()["message"], LIMIT_REACHED)
         self.assertEqual(c.get("/").json()["captions_minutes_left_today"], 0)
+
+    def test_relay_passes_the_newest_camera_frame_with_the_key_only(self):
+        c = self.client()
+        jpeg = base64.b64decode(jpeg_b64())
+        self.assertEqual(c.get("/relay/k3y/eye/capture").status_code, 503)    # nothing pushed yet
+        with c.websocket_connect("/relay/k3y/push/eye") as ws:
+            ws.send_bytes(b"not a jpeg")
+            ws.send_bytes(jpeg)
+            c.get("/relay/k3y")                                               # let the push land
+        self.assertEqual(c.get("/relay/k3y/eye/capture").content, jpeg)
+        self.assertEqual(c.get("/relay/k3y").json()["front"], None)
+        with c.stream("GET", "/relay/k3y/eye/stream") as r:
+            self.assertIn("multipart/x-mixed-replace", r.headers["content-type"])
+            first = next(r.iter_bytes())
+        self.assertIn(jpeg, first)
+        self.assertEqual(c.get("/relay/wrong/eye/capture").status_code, 404)
+        self.assertEqual(c.get("/relay/k3y/back/capture").status_code, 404)
+        with self.assertRaises(Exception), c.websocket_connect("/relay/wrong/push/eye") as ws:
+            ws.receive_bytes()
+
+    def test_relay_is_off_without_a_key(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.dict(os.environ, {"RELAY_KEY": ""}):
+            c = TestClient(create_app(tmp.name, make_upstream=Silent, muse=FakeMuse()))
+        self.assertEqual(c.get("/relay//eye/capture").status_code, 404)
+        self.assertEqual(c.get("/relay/x").status_code, 404)
 
     def test_meter_starts_over_each_day(self):
         now = [0.0]

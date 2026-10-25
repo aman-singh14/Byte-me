@@ -41,6 +41,20 @@ class NoDetector implements ObjectDetector {
   void dispose() {}
 }
 
+/// A frame of the eye fixtures (make_eye_fixtures.py) as the eye camera's JPEG.
+Uint8List fixtureJpeg(String name) {
+  final expected = jsonDecode(File('test/fixtures/eye/expected.json').readAsStringSync()) as Map<String, dynamic>;
+  final raw = gzip.decode(File('test/fixtures/eye/frames.gray.gz').readAsBytesSync());
+  final i = [for (final r in expected['frames'] as List) (r as Map)['name'] as String].indexOf(name);
+  final im = img.Image.fromBytes(
+    width: 320,
+    height: 240,
+    numChannels: 1,
+    bytes: Uint8List.fromList(raw.sublist(i * 76800, (i + 1) * 76800)).buffer,
+  );
+  return img.encodeJpg(im, quality: 90);
+}
+
 void main() {
   group('Blinks and squints', () {
     BlinkSquintDetector calibrated() {
@@ -269,21 +283,7 @@ void main() {
     });
 
     test('a fake eye camera blinks, and BackendLink shows it as if it were the laptop', () async {
-      final expected = jsonDecode(File('test/fixtures/eye/expected.json').readAsStringSync()) as Map<String, dynamic>;
-      final raw = gzip.decode(File('test/fixtures/eye/frames.gray.gz').readAsBytesSync());
-      final names = [for (final r in expected['frames'] as List) (r as Map)['name'] as String];
-      Uint8List jpeg(String name) {
-        final i = names.indexOf(name);
-        final im = img.Image.fromBytes(
-          width: 320,
-          height: 240,
-          numChannels: 1,
-          bytes: Uint8List.fromList(raw.sublist(i * 76800, (i + 1) * 76800)).buffer,
-        );
-        return img.encodeJpg(im, quality: 90);
-      }
-
-      final open = jpeg('settle 0'), closed = jpeg('open 0.0');
+      final open = fixtureJpeg('settle 0'), closed = fixtureJpeg('open 0.0');
       board.send(
         utf8.encode('{"t":"cam_hello","role":"eye","ip":"x","stream":"udp","stream_port":${board.port},"http_port":1}'),
         InternetAddress.loopbackIPv4,
@@ -319,6 +319,39 @@ void main() {
       expect((backend.eyes!.blinksTotal, backend.eyes!.eyeDetected, backend.eyes!.eyeCameraOnline), (1, true, true));
       expect(backend.rings, isNotNull);
       backend.dispose();
+    });
+
+    test('an eye camera on another network blinks through the relay', () async {
+      final open = fixtureJpeg('settle 0'), closed = fixtureJpeg('open 0.0');
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final asked = <String>[];
+      var done = false;
+      server.listen((req) async {
+        final first = !asked.contains(req.uri.path);
+        asked.add(req.uri.path);
+        if (req.uri.path != '/relay/k3y/eye/stream' || !first) {
+          req.response.statusCode = 404;
+          return req.response.close();
+        }
+        req.response.headers.contentType = ContentType.parse('multipart/x-mixed-replace; boundary=frame');
+        for (final f in [...List.filled(20, open), ...List.filled(4, closed), ...List.filled(10, open)]) {
+          req.response.add([...utf8.encode('--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${f.length}\r\n\r\n'), ...f, 13, 10]);
+          await req.response.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 40)); // 25 fps
+        }
+        done = true;
+        await req.response.close();
+      });
+      link.relay = parseRelay('http://127.0.0.1:${server.port}/relay/k3y');
+      while (!done) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(asked, containsAll(['/relay/k3y/eye/stream', '/relay/k3y/front/stream']));
+      expect(eyes.eye.state.blinksTotal, 1);
+      expect(eyes.live().eyeCameraOnline, isTrue);
+      link.relay = null;
+      await server.close(force: true);
     });
 
     test('front camera near-work becomes a close-up session, heads-up and the frame sensor stand-in', () async {

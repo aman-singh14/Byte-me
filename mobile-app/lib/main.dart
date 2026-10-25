@@ -35,6 +35,8 @@ void main() {
   final buzzer = PhoneBuzzer();
   link.onNoFrame = (cmd) => unawaited(buzzer.play(cmd));
   link.start().catchError((Object e) => debugPrint('GlassesLink could not start: $e'));
+  // Eye and front cameras on another network, through tools/cam_relay.py, if set in Settings.
+  link.loadRelay().catchError((Object e) => debugPrint('No camera relay: $e'));
   final vision = RearVision(link, YoloDetector());
   final alerts = AlertService(link, vision, namer: CamBFireNamer(link, YoloDetector()));
   alerts.start();

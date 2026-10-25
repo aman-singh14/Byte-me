@@ -28,7 +28,6 @@ import '../net/glasses_link.dart';
 import '../net/protocol.dart';
 import '../vision/detector.dart';
 import '../vision/mjpeg.dart';
-import '../vision/udp_camera.dart';
 import 'blinks.dart';
 import 'eye_history.dart';
 import 'gaze.dart';
@@ -191,22 +190,18 @@ class PhoneEyes extends ChangeNotifier {
 
   // -- the camera boards ---------------------------------------------------------
 
-  CameraFeed _open(CameraBoard b) => b.hello.udp
-      ? UdpCamera(b.address, b.hello.streamPort)
-      : RearCamera(Uri.parse('http://${b.address.address}:${b.hello.streamPort}/stream'));
-
   void _boardsChanged() {
     if (link.eyeCam != _eyeBoard) {
       _eyeBoard = link.eyeCam;
       _eyeCam?.frame.removeListener(_onEyeFrame);
       _eyeCam?.dispose();
-      _eyeCam = _eyeBoard == null ? null : (_open(_eyeBoard!)..start());
+      _eyeCam = _eyeBoard == null ? null : (_eyeBoard!.open()..start());
       _eyeCam?.frame.addListener(_onEyeFrame);
     }
     if (link.frontCam != _frontBoard) {
       _frontBoard = link.frontCam;
       _frontCam?.dispose();
-      _frontCam = _frontBoard == null ? null : (_open(_frontBoard!)..start());
+      _frontCam = _frontBoard == null ? null : (_frontBoard!.open()..start());
     }
   }
 
@@ -326,12 +321,10 @@ class PhoneEyes extends ChangeNotifier {
   }
 
   Future<void> _pollSensor() async {
-    final b = _frontBoard;
-    if (b == null) return;
+    final url = _frontBoard?.sensor;
+    if (url == null) return; // no board, or one through a relay: no outside time
     try {
-      final r = await _http
-          .get(Uri.parse('http://${b.address.address}:${b.hello.httpPort}/sensor'))
-          .timeout(const Duration(seconds: 1));
+      final r = await _http.get(url).timeout(const Duration(seconds: 1));
       final j = jsonDecode(r.body);
       if (j is Map<String, dynamic>) {
         final (exp, gain) = parseSensor(j);

@@ -157,6 +157,42 @@ sends status and video. Type `track` (video on/off), `collide` or `turn`, then E
 gets no status: that's what to expect until the firmware change. In the iOS Simulator use
 `--phone 127.0.0.1 --back-port 4301` (the app has 4300 on the same Mac).
 
+### Cameras on another network
+
+When only the back camera + FPGA is on the phone's hotspot and the eye and front boards run
+stock firmware (CameraWebServer, MJPEG at `http://<board>:81/stream`) on some other Wi-Fi, the
+phone can't reach them. A laptop on that Wi-Fi relays them:
+
+```bash
+.venv/bin/python tools/cam_relay.py --eye 192.168.1.50 --front 192.168.1.51 --to https://omni-glasses.fly.dev --key "$RELAY_KEY"
+```
+
+Then in the app, Settings > Cameras on another network: `https://omni-glasses.fly.dev/relay/<key>`.
+The phone pulls them over cellular like any MJPEG board: blinks, gaze, near-work, Ask and the
+helper's Front view all work. `RELAY_KEY` is a Fly secret (cloud/README.md) and the cloud server
+needs a deploy with `cloud/relay.py`. To skip the cloud, `--serve 8030 --key k` serves the same
+paths from the laptop, for a phone that can reach it (Tailscale, or the same Wi-Fi):
+`http://<laptop>:8030/relay/k`.
+
+- **No outside time:** stock firmware has no `/sensor` exposure numbers, so the outside ring stays put.
+- **Ask's photo** is the newest stream frame, 320x240 on stock firmware unless you add
+  `--front-framesize 8` (640x480; costs about 4x the data).
+- **Data and lag:** the eye at 15 fps and the front at 5 fps are about 60 + 25 KB/s at 320x240
+  (around 300 MB an hour of cellular), and a few hundred ms late. `--eye-fps` and `--front-fps` cap them.
+- A board that says hello on the hotspot is used before the relay.
+
+**A USB webcam on the laptop as the front camera** (`--front webcam`, or `webcam:1` for a second
+camera). The relay centre-crops it to 4:3 like the boards (the app's distances assume 4:3) at
+960x720, which makes Ask's photo and the helper's Front view much sharper than the ESP32's:
+
+```bash
+.venv/bin/python tools/cam_relay.py --front webcam --front-fps 15 --serve 8030 --key k
+```
+
+With the laptop on the phone's hotspot, type `http://<laptop's 172.20.10.x>:8030/relay/k` in the
+app. Through the cloud instead (`--to`), use `--webcam-height 480 --front-fps 5` to save cellular
+data. macOS asks once to allow Camera for your terminal. Still no outside time (no exposure numbers).
+
 ## Rear view and detection
 
 - The Aware tab shows Cam A's stream with labeled boxes. The image is

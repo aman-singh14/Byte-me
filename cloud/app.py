@@ -6,12 +6,14 @@ glasses, at one HTTPS address, so the app works on any network with no laptop.
                                                                      backend/helper.py
     Captions        WS /ws/captions                                  backend/captions.py
     Muse            POST /vlm/{feature}                              backend/vlm.py
+    Camera relay    WS /relay/{key}/push/{role}, /relay/{key}/{role}/stream   cloud/relay.py
 
 The laptop backend (backend/main.py) still does everything that needs the glasses'
 cameras: eye tracking, near-work, rings, rear events, "Ask".
 
 Keys come from the environment (on Fly: fly secrets set) and never go in the app:
-MUSE_API_KEY, and optionally LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET.
+MUSE_API_KEY, and optionally LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and
+RELAY_KEY for cameras on another network (off without it).
 
 Anyone who finds the address can use it (the app has no passwords), so whatever
 costs money is capped: Muse by muse.* in backend/config.yaml ($5 a day, $10 in all,
@@ -34,6 +36,7 @@ from backend.config import load_config
 from backend.db import DB as BackendDB
 from backend.muse_client import MuseClient, MuseUnavailable
 from backend.vlm import VlmError, VlmService
+from cloud import relay
 from social.app import create_app as social_app
 
 LIMIT_REACHED = "Captions have used up today's time on this server. They work again tomorrow."
@@ -108,7 +111,7 @@ class VlmRequest(BaseModel):
     question: str | None = None
 
 
-def create_app(data_dir=None, make_upstream=captions.meta_upstream, muse=None):
+def create_app(data_dir=None, make_upstream=captions.meta_upstream, muse=None, relay_key=None):
     data = Path(data_dir or os.environ.get("DATA_DIR", "data"))
     data.mkdir(parents=True, exist_ok=True)
     app = social_app(str(data / "social.db"))
@@ -123,6 +126,7 @@ def create_app(data_dir=None, make_upstream=captions.meta_upstream, muse=None):
         return MeteredUpstream(inner, meter) if inner else None
 
     app.include_router(captions.router(metered))
+    app.include_router(relay.router(relay.Frames(), relay_key))
 
     # No front camera up here: the app sends the images it has.
     vlm = VlmService(muse or MuseClient(load_config(), BackendDB(str(data / "muse.db"))))

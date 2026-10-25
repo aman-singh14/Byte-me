@@ -50,6 +50,7 @@ class SettingsScreen extends StatelessWidget {
             subtitle: Text(link.frontCam?.video.toString() ?? 'Not found'),
           ),
           const _EyeCameraTile(),
+          const _CameraRelayTile(),
           const BackendSettingsTile(),
           const _VoiceTile(),
           ListTile(
@@ -244,6 +245,63 @@ class _EyeCameraTile extends StatelessWidget {
           ? TextButton(onPressed: eyes.calibrateGaze, child: const Text('Calibrate gaze'))
           : null,
     );
+  }
+}
+
+/// Eye and front cameras on another Wi-Fi, through a relay (tools/cam_relay.py).
+class _CameraRelayTile extends StatelessWidget {
+  const _CameraRelayTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final link = context.watch<GlassesLink>();
+    final relay = link.relay;
+    return ListTile(
+      leading: const Icon(Symbols.cloud_sync_rounded),
+      title: const Text('Cameras on another network'),
+      subtitle: Text(relay == null ? 'Off' : '${relay.authority}${relay.path}'),
+      trailing: const Icon(Symbols.edit_rounded),
+      onTap: () => _edit(context, link),
+    );
+  }
+
+  Future<void> _edit(BuildContext context, GlassesLink link) async {
+    final controller = TextEditingController(text: link.relay?.toString() ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Camera relay'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'When the eye and front cameras are on another Wi-Fi, a laptop there runs tools/cam_relay.py '
+              'and this phone gets their video from the address it prints. Frames pass through it, newest '
+              'only, and are not kept. Cameras on the hotspot are used first. Leave empty to turn it off.',
+            ),
+            SizedBox(height: context.space.m),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(labelText: 'Address', hintText: 'https://omni-glasses.fly.dev/relay/KEY'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result == null || !context.mounted) return;
+    final ok = await link.saveRelay(result);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That doesn\'t look like a relay address (…/relay/KEY).')),
+      );
+    }
   }
 }
 
