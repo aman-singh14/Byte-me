@@ -13,8 +13,15 @@ bridge, and uvicorn.
 
 import argparse
 import collections
+import os
 import threading
 import time
+
+try:  # python.org's macOS Python has no CA certificates: model downloads (Face Mesh, YOLO) fail without this
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+except ImportError:
+    pass
 
 import cv2
 import numpy as np
@@ -33,6 +40,7 @@ from backend.rear_alert import RearAlert
 from backend.speech import Voice
 from backend.assist import Assistant
 from backend.muse_client import MuseClient
+from backend.vlm import VlmService
 from backend.vision import Detector
 from backend.rear.service import RearService
 from backend.streams import SYNTHETIC_FRONT, StreamManager, blank
@@ -101,6 +109,9 @@ class Runtime:
         v = cfg.get("vision", {})
         self.detector = Detector(v.get("model", "yolov8n.pt"), v.get("min_conf", 0.35))
         self.muse = MuseClient(cfg, self.db)
+        front = self.streams.cameras.get("front")
+        self.vlm = VlmService(self.muse, front_frame=lambda: (front.latest()[1] if front is not None
+                                                              and front.status().get("ok") else None))
         self.assistant = Assistant(self.streams.cameras.get("front"), self.detector, self.muse, self.gaze,
                                    self.voice, self.emit, focal_px=self.distance._focal, db=self.db,
                                    still_fn=lambda: self.front_still())
@@ -430,7 +441,7 @@ def main(argv=None):
     if args.mock_fpga:
         start_mock_fpga(cfg, args.mock_fpga)
     app = create_app(rt)
-    host, port = cfg["api"].get("host", "0.0.0.0"), cfg["api"].get("port", 8000)
+    host, port = cfg["api"].get("host", "0.0.0.0"), cfg["api"].get("port", 8001)
     print(f"[api] dashboard http://localhost:{port}/   docs http://localhost:{port}/docs")
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
     try:

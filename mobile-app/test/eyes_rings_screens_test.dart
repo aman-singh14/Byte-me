@@ -4,10 +4,12 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_glasses/alerts/alert_service.dart';
 import 'package:omni_glasses/alerts/voice.dart';
 import 'package:omni_glasses/app.dart';
+import 'package:omni_glasses/assist/voice_questions.dart';
 import 'package:omni_glasses/helper/helper_call.dart';
 import 'package:omni_glasses/net/backend_api.dart';
 import 'package:omni_glasses/net/backend_link.dart';
@@ -15,6 +17,7 @@ import 'package:omni_glasses/net/backend_rings.dart';
 import 'package:omni_glasses/net/glasses_link.dart';
 import 'package:omni_glasses/screens/home_shell.dart';
 import 'package:omni_glasses/screens/settings_screen.dart';
+import 'package:omni_glasses/settings/feature_flags.dart';
 import 'package:omni_glasses/social/rings_source.dart';
 import 'package:omni_glasses/social/side_quests.dart';
 import 'package:omni_glasses/social/social_store.dart';
@@ -24,6 +27,8 @@ import 'package:omni_glasses/vision/rear_vision.dart';
 import 'package:provider/provider.dart';
 
 import 'backend_fakes.dart';
+import 'captions_test.dart' show fakeCaptions;
+import 'voice_questions_test.dart' show FakeQuestionSpeech;
 import 'social_test.dart' show FakeRadio, FixedRings;
 
 class _NoDetector implements ObjectDetector {
@@ -80,11 +85,13 @@ Future<void> pump(
     alerts: alerts.events,
     watchLifecycle: false,
   );
+  final questions = VoiceQuestions(backend: backend, voice: voice, speech: FakeQuestionSpeech(), watchLifecycle: false);
   final rings = BackendRings(backend, FixedRings());
   final social = SocialStore(link: glasses, rings: rings);
   final quests = SideQuestStore(rings: rings, sens: glasses.sens);
   final together = TogetherTime(social: social, radio: FakeRadio());
   for (final d in [
+    questions.dispose,
     helper.dispose,
     together.dispose,
     quests.dispose,
@@ -100,6 +107,8 @@ Future<void> pump(
   await tester.pumpWidget(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: FeatureFlags()),
+        ChangeNotifierProvider.value(value: fakeCaptions()),
         ChangeNotifierProvider.value(value: glasses),
         ChangeNotifierProvider.value(value: vision),
         ChangeNotifierProvider.value(value: alerts),
@@ -110,6 +119,7 @@ Future<void> pump(
         ChangeNotifierProvider.value(value: together),
         ChangeNotifierProvider.value(value: backend),
         ChangeNotifierProvider.value(value: helper),
+        ChangeNotifierProvider.value(value: questions),
       ],
       child: MaterialApp(theme: omniLightTheme, darkTheme: omniDarkTheme, home: home),
     ),
@@ -162,11 +172,11 @@ void main() {
     expect(find.bySemanticsLabel(RegExp('Heads-up ring, 1 hour 36 minutes of 3 hours')), findsOneWidget);
   });
 
-  testWidgets('Together shows the week of rings', (tester) async {
+  testWidgets('Together omits personal ring history', (tester) async {
     await pump(tester, const HomeShell(), await filledLink(tester));
     await openTab(tester, 'Together');
-    expect(find.text('Rings this week'), findsOneWidget);
-    expect(find.text('Today'), findsWidgets);
+    expect(find.text('Rings this week'), findsNothing);
+    expect(find.text('Join Together'), findsWidgets);
   });
 
   testWidgets('calibration sheet posts the chosen object and distance', (tester) async {
@@ -187,31 +197,48 @@ void main() {
     expect(find.text('Laptop calibrated at 50 cm.'), findsOneWidget);
   });
 
-  testWidgets('What am I looking at? asks the backend and speaks the answer', (tester) async {
+  testWidgets('hold to ask sends what was heard, and works with a screen reader', (tester) async {
     final voice = _FakeVoice();
     await pump(tester, const HomeShell(), await filledLink(tester), voice: voice);
-    expect(find.text('What am I looking at?'), findsWidgets);
-    await tester.ensureVisible(find.widgetWithText(ChoiceChip, 'Right'));
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Right'));
-    await tester.pump();
-    final button = find.widgetWithText(FilledButton, 'What am I looking at?');
+    expect(find.text('Ask your glasses'), findsOneWidget);
+    expect(find.byType(ChoiceChip), findsNothing);
+    final button = find.text('Hold to ask');
     await tester.ensureVisible(button);
+    final questions = tester.element(button).read<VoiceQuestions>();
+    final speech = questions.speech as FakeQuestionSpeech;
+    final finger = await tester.startGesture(tester.getCenter(button));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Listening… let go to send'), findsOneWidget);
+    speech.result!('Read the label on that cup', false);
+    await finger.up();
     await tester.pump();
-    await tester.runAsync(() async {
-      await tester.tap(button);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
     await tester.pump();
-    expect(find.textContaining('An open laptop is just ahead'), findsOneWidget);
-    expect(find.textContaining('Ahead: a laptop'), findsOneWidget);
-    expect(find.textContaining('Looked right'), findsOneWidget);
+    expect(questions.question, 'Read the label on that cup');
+    expect(questions.answer?.regionSource, 'gaze');
     expect(voice.said, ['An open laptop is just ahead of you on a desk, with a white mug to its right.']);
+
+    // With a screen reader: double tap to start, double tap again to send.
+    final semantics = tester.ensureSemantics();
+    final askButton = find.semantics.byPredicate(
+      (n) => n.getSemanticsData().hasAction(SemanticsAction.tap) && n.label.contains(RegExp('Ask your glasses|Listening')),
+    );
+    tester.semantics.tap(askButton);
+    await tester.pump();
+    expect(questions.holding, isTrue);
+    speech.result!('What color is the mug', false);
+    tester.semantics.tap(askButton);
+    await tester.pump();
+    await tester.pump();
+    expect(questions.question, 'What color is the mug');
+    semantics.dispose();
   });
 
   testWidgets('Settings shows the laptop address', (tester) async {
     await pump(tester, const SettingsScreen(), await filledLink(tester));
     expect(find.text('Laptop (backend)'), findsOneWidget);
-    expect(find.textContaining('172.20.10.2:8000 (typed in)'), findsOneWidget);
+    expect(find.textContaining('172.20.10.2:8001 (typed in)'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Muse speed check'), 300);
+    expect(find.text(Feature.socialTaps.title), findsOneWidget);
   });
 
   for (final brightness in Brightness.values) {

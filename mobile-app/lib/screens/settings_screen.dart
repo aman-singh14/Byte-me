@@ -8,10 +8,12 @@ import 'package:provider/provider.dart';
 import '../gallery/widget_gallery.dart';
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
+import '../settings/feature_flags.dart';
 import '../social/social_store.dart';
 import '../theme/theme.dart';
 import 'backend_widgets.dart';
 import 'together_screen.dart' show askText;
+import 'vlm_debug_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -54,11 +56,12 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const _TogetherSettings(),
+          const _FeatureSwitches(),
           _Header('Privacy'),
           const ListTile(
             leading: Icon(Symbols.videocam_off_rounded),
-            title: Text('Nothing recorded'),
-            subtitle: Text('Video and audio are processed on this phone and thrown away. No faces or names.'),
+            title: Text('Camera and voice processing'),
+            subtitle: Text('Rear alerts run on this phone. Voice questions use your device’s speech service and the laptop backend. Richer descriptions use Muse when configured.'),
           ),
           const ListTile(
             leading: Icon(Symbols.lock_rounded),
@@ -91,6 +94,36 @@ class _Header extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.fromLTRB(context.space.l, context.space.xl, context.space.l, context.space.s),
       child: Semantics(header: true, child: Text(text, style: context.type.headline)),
+    );
+  }
+}
+
+/// One switch per newer feature, so any can be turned off for a demo.
+class _FeatureSwitches extends StatelessWidget {
+  const _FeatureSwitches();
+
+  @override
+  Widget build(BuildContext context) {
+    final flags = context.watch<FeatureFlags>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Header('Features'),
+        for (final f in Feature.values)
+          SwitchListTile.adaptive(
+            title: Text(f.title),
+            subtitle: Text(f.blurb),
+            value: flags[f],
+            onChanged: (on) => flags.set(f, on),
+          ),
+        ListTile(
+          leading: const Icon(Symbols.speed_rounded),
+          title: const Text('Muse speed check'),
+          subtitle: const Text('Time real requests to see how fast descriptions are.'),
+          trailing: const Icon(Symbols.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const VlmDebugScreen())),
+        ),
+      ],
     );
   }
 }

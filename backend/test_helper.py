@@ -6,8 +6,13 @@ dropping, and command forwarding.
 
 import asyncio
 import json
+import os
 import struct
 import unittest
+from pathlib import Path
+from unittest import mock
+
+import jwt
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -152,6 +157,26 @@ class RoomsTest(unittest.TestCase):
                 helper_ws.receive_text()  # the server hangs up on the helper at once
             self.assertEqual(e.exception.code, helper.CLOSE_ENDED)
         self.assertIsNone(self.rooms.get(self.room["room"]))  # ended for good
+
+    def test_livekit_tokens_need_a_room_token_and_keys(self):
+        keys = {"LIVEKIT_URL": "wss://omni.livekit.cloud", "LIVEKIT_API_KEY": "key", "LIVEKIT_API_SECRET": "s" * 32}
+        path = f"/livekit-token?room={self.room['room']}"
+        self.assertEqual(self.client.get(f"{path}&t=nope").status_code, 404)
+        with mock.patch.dict(os.environ, {k: "" for k in keys}), mock.patch.object(helper, "ENV_FILE", Path("/nonexistent")):
+            r = self.client.get(f"{path}&t={self.helper_token}")
+            self.assertEqual(r.status_code, 503)  # no keys: video and buzzes only
+        with mock.patch.dict(os.environ, keys):
+            for token, role in ((self.room["wearer_token"], "wearer"), (self.helper_token, "helper")):
+                r = self.client.get(f"{path}&t={token}")
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.headers["cache-control"], "no-store")
+                body = r.json()
+                self.assertEqual((body["url"], body["identity"]), (keys["LIVEKIT_URL"], role))
+                claims = jwt.decode(body["token"], keys["LIVEKIT_API_SECRET"], algorithms=["HS256"])
+                self.assertEqual(claims["sub"], role)
+                self.assertEqual(claims["video"]["room"], f"omni-{self.room['room']}")
+                self.assertEqual(claims["video"]["canPublishSources"], ["microphone"])
+                self.assertLessEqual(claims["exp"] - claims["nbf"], helper.ROOM_TTL_S + 5)
 
     def test_one_helper_per_room(self):
         with self.helper() as first:

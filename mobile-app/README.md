@@ -214,8 +214,9 @@ Try it with the mock: walk toward the webcam (gentle "person" alert at about
 ## Together (friends, teams, quests)
 
 Run the social server (see `../social/README.md`), then the app as usual: it
-uses `http://localhost:8000` unless built with `--dart-define=SOCIAL_URL=...`
-or changed in Settings > Together server.
+uses `http://localhost:8000` unless built with `--dart-define=CLOUD_URL=...` (the
+cloud server, `../cloud/README.md`) or `--dart-define=SOCIAL_URL=...`, or changed in
+Settings > Together server.
 
 - **Joining:** pick a display name. No account or password; the server hands
   the phone a random token.
@@ -265,6 +266,42 @@ or changed in Settings > Together server.
   fills in from sensor samples until the real rings code implements it;
   swap it in `main.dart`. Only the percentages leave the phone.
 
+## Voice questions
+
+The camera backend uses port **8001**; Together uses **8000**. Start the camera
+backend with `python -m backend.main` from an environment with the backend
+dependencies installed. In Settings > Laptop (backend), use `127.0.0.1:8001`
+for the iOS simulator or the laptop’s LAN address on a real phone. Clear a
+previously saved `:8000` backend address or change it to `:8001`.
+
+On Today, **Ask your glasses** has a **Hold to ask** button. Hold it, ask any
+question, and let go to send it: for example, “Read that sign”, “Is this a
+doorway?” or “What color is that cup?”. No fixed trigger phrase, typed question,
+or direction buttons are needed. The answer is spoken and shown. With VoiceOver
+or TalkBack (which can't hold), double tap to start listening and double tap
+again to send.
+
+The inward-facing EYE camera determines left / ahead / right. Voice requests
+require a gaze sample from the last 1.5 seconds and refuse to guess while gaze
+is missing or calibrating. Words such as “left” in a question do not override
+the eye-camera direction. The FRONT camera provides the matching scene crop.
+Calibrate gaze for the glasses' camera mounting using the backend's gaze
+calibration flow. The webcam mock alone cannot supply real eye-camera gaze.
+
+Microphone and speech permissions are requested the first time the button is
+pressed. Recognition uses the phone's speech service, which may process audio
+online; the transcript and selected front-camera view go to the laptop backend,
+and optionally Muse for richer answers. Without Muse, the answer is limited to
+local object descriptions, rather than arbitrary visual question answering.
+
+The microphone is on only while the button is held. Sliding off the button or
+leaving the app drops the question. If iOS fails to start the recognizer (error
+300), the app retries once while the button is still held, then says so; the
+next press tries again. **Speech recognition doesn't work in the iOS Simulator**
+(its speech model fails to load, which shows up as error 300), so test on a real
+phone. Rebuild/reinstall after adding the speech plugin and permissions; hot
+reload alone is insufficient.
+
 ## Call a helper
 
 A helper (friend, family, guide) opens a link in any browser, sees the
@@ -281,15 +318,27 @@ tab, and a card on Today).
   time); the front stream is opened only while the helper is watching it.
 - **Guidance:** the helper's Left / Forward / Right / Stop goes to the frame
   as `{"t":"guide","dir":...}` (a buzz unlike any alert) and is spoken.
-- **Alerts** (approach and "someone behind you") are passed on to the helper.
+- **Alerts** (approach, "someone behind you" and social taps) are passed on to the helper.
+- **LIVE LED:** `{"t":"live","on":true}` goes to the frame when a helper
+  connects and `false` when they leave or the call ends, so people nearby can
+  tell someone is watching. Always on during a call; no switch.
+- **Audio (LiveKit):** once the helper is there, the app gets a token from
+  `GET /livekit-token` and joins the call's audio room: mic published with
+  echo cancellation and noise suppression, the helper's voice played in call
+  audio mode (Bluetooth open-ear / bone-conduction headsets work). Mute button
+  on the call screen. Without LiveKit keys on the server, or with **Helper call
+  audio** switched off, the call carries on with video and buzzes and says so.
+  Ending the call stops video, audio, the room and the LED together.
 - Leaving the app while live ends the call; leaving while waiting (to send the
   link) doesn't. Status is spoken, or announced to VoiceOver / TalkBack.
 - **Helper page:** consent and Join, live video/timer/estimated delay, Front/Rear,
   large guidance buttons, keyboard shortcuts, and readable alerts. Uses your
   Together display name if set. Stale video disables movement guidance; Stop
-  stays available while connected. Audio/Mute is marked unavailable for now.
-- Not yet (build steps 4–5): two-way audio (LiveKit), the LIVE LED on the
-  glasses, keep-screen-on.
+  stays available while connected. Join also starts the helper's microphone;
+  the page shows Mute and who is speaking.
+- Not measured yet: audio delay on cellular vs Wi-Fi (needs two real devices
+  on different networks; see the tunnel steps below).
+- Not yet: keep-screen-on during a call.
 
 Run it end to end on one laptop:
 
@@ -319,6 +368,113 @@ cloudflared tunnel --url http://localhost:8020
 ```bash
 flutter run --dart-define=HELPER_URL=https://<name>.trycloudflare.com --dart-define=FRONT_CAM_URL=http://front-cam.local:81/stream
 ```
+
+## Live captions
+
+For Deaf and hard-of-hearing wearers: what people around you say, as large
+text with "Speaker 1" / "Speaker 2". Aware tab (full captions) and a quick
+toggle on Today. Off by default; the first time, a short explanation asks
+for a yes. While on: "Captions on · audio sent to Meta for transcription".
+
+- **Speech to text:** Meta's Muse Voice Transcribe, through a relay on the laptop
+  (`backend/captions.py`, `WS /ws/captions`) that holds the Meta key, so the
+  key is never in the app. The app sends 16 kHz 16-bit mono PCM from the mic
+  (`record` package) in 100 ms pieces; caption events come back.
+- **Turns:** partial text is shown lighter and in italics, then replaced by the
+  final text. A label only where the speaker changes. Follows the newest
+  line; scroll up to read back, "Jump to latest" to return. Size 20–48.
+  Pause / Resume and Clear. Nothing saved; turning captions off clears them.
+- **Speaker labels** use Meta's `DIARIZATION` mode. Switching them off uses
+  `ENDPOINTING`, which finishes lines faster. There is no "continuous" mode
+  in Meta's API; these two are its multi-turn modes.
+- Screen readers hear state changes ("Captions: Live"), not every line.
+- Code: `lib/captions/caption_transcript.dart` (events -> lines),
+  `lib/captions/captions.dart` (mic, relay, states),
+  `lib/screens/captions_widgets.dart`, `CaptionView` in
+  `lib/components/captions_and_who.dart`.
+
+**Measured** (laptop on home Wi-Fi, through the relay, `tools/caption_latency.py`):
+
+| Mode | Speech starts -> first words | Speech ends -> final line |
+|---|---|---|
+| Speaker labels (DIARIZATION) | 0.9–1.2 s | 0.9–2.6 s, median ~2 s |
+| No labels (ENDPOINTING) | 0.7–0.95 s | 0.3–0.55 s |
+
+Run it (repo root), with a relay in one terminal and the app in another:
+
+```bash
+social/.venv/bin/python -m backend.captions --port 8030 --mock      # canned turns, no key or network
+```
+
+```bash
+social/.venv/bin/python -m backend.captions --port 8030             # real Meta captions of the mic
+```
+
+```bash
+social/.venv/bin/python -m backend.captions --port 8030 --wav tools/samples/conversation.wav   # real Meta, a recording instead of the mic
+```
+
+```bash
+flutter run --dart-define=CAPTIONS_URL=ws://localhost:8030/ws/captions
+```
+
+Without `CAPTIONS_URL` the app uses the laptop backend's `/ws/captions` (port
+8001), which the full backend serves too. Measure latency yourself:
+
+```bash
+social/.venv/bin/python tools/caption_latency.py tools/samples/conversation.wav
+```
+
+Not yet (build steps 3–6): automatic reconnects (and a fresh session before
+Meta's 60-minute limit), on-device fallback, vocabulary biasing from Together
+names and a custom word list, language setting, translation, pausing during
+helper calls, and the privacy screen.
+
+## Social taps
+
+Someone walks up and stops close behind or beside you: the glasses give a
+soft tap on that side, the app shows a teal card and says "Someone stopped
+behind you, left." (plus what they're doing, like "Waving"). Code:
+`lib/alerts/social_tap.dart` (when), `lib/alerts/social_taps.dart` (Muse
+check, tap, look up).
+
+- **When:** a person's box grew (they came closer), is now about 1.5 m away
+  (75% of the image tall or cut off, a fifth of it wide), and stayed steady for
+  a full second. Nothing while a safety alert is up or the head is turning:
+  fast approaches stay alerts. One tap per person a minute.
+- **Muse check:** one rear snapshot asks whether they're facing you or trying to
+  get your attention. No: no tap. Muse slow (4 s) or unreachable: tap anyway,
+  better than missing someone.
+- **Look up:** during close-up work (the laptop's close-up session, or the
+  frame's distance sensor under 45 cm for 10 s) the tap is
+  `{"t":"tap","kind":"lookup"}` and the app says "Look up, someone's here."
+  Turning toward that side within 10 s adds 1 minute to the Look up quest.
+- Never the urgent color, haptic or buzz. Logged in the event log as "Someone
+  stopped behind left".
+
+Try it with the mock: type `person l` (walks up on your left and stops for
+8 s), or `read` first and then `person` for a "look up" tap.
+
+## Muse (VLM) service
+
+Every snapshot feature goes through one service: `lib/assist/vlm.dart` in
+the app, `POST /vlm/{feature}` on the laptop backend (`backend/vlm.py`, which
+holds the key and the spending cap). Each feature has a prompt, a JSON
+schema, and a 4 s timeout with a fallback. The rules for every call are: positions
+and actions only, never identify anyone or guess age, race, gender or
+emotion, say when unsure, never call anything safe. Images and answers aren't
+stored.
+
+**Settings > Muse speed check** times real requests (p50 / p90), and holds the
+**Muse mock mode** switch (canned answers, no network). Measured from the
+laptop on home Wi-Fi: about 1.9 s for a description, 2.1–2.8 s for a social
+tap check.
+
+## Feature switches
+
+Settings > **Features** turns any newer feature off for a demo: social taps,
+the Muse check on taps, the "look up" nudge, helper call audio, and Muse mock
+mode (`lib/settings/feature_flags.dart`, saved on the phone).
 
 ## Widget Gallery
 
@@ -379,3 +535,13 @@ flutter test
   `fwd` two 250 ms pulses on both motors, `stop` one steady 1 s buzz on both.
   An approach alert always wins: no guidance while an alert is buzzing.
   `mock_glasses.py` prints each one with its pattern.
+- **`tap`: `{"t":"tap","side":"L"|"R"|"B","kind":"social"|"lookup"}`**,
+  someone stopped close by. Soft (about 40% strength), never like an alert:
+  `social` two short 60 ms taps (120 ms gap) on that side (`B`: both);
+  `lookup` the same, then one soft 300 ms pulse on both motors.
+- **`live`: `{"t":"live","on":true|false}`**: front LED on while a remote
+  helper is watching, off otherwise. No buzz.
+- **`nudge`: `{"t":"nudge","kind":"close"|"break"}`** (eye health, coming):
+  `close` one slow soft 500 ms pulse on both; `break` three slow soft 300 ms
+  pulses (300 ms gaps) on both.
+- A safety alert always wins over tap, guide and nudge.

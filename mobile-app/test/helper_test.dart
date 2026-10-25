@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:omni_glasses/alerts/alert_engine.dart';
+import 'package:omni_glasses/helper/helper_audio.dart';
 import 'package:omni_glasses/helper/helper_call.dart';
 import 'package:omni_glasses/net/protocol.dart';
 
@@ -61,6 +62,23 @@ class FakeCameras implements HelperCameras {
   void close(HelperCamera which) => opened.remove(which);
 }
 
+class FakeAudio implements HelperAudio {
+  final log = <String>[];
+  Object? failJoin;
+
+  @override
+  Future<void> join(String url, String token) async {
+    if (failJoin != null) throw failJoin!;
+    log.add('join $url $token');
+  }
+
+  @override
+  Future<void> setMuted(bool muted) async => log.add(muted ? 'mute' : 'unmute');
+
+  @override
+  Future<void> leave() async => log.add('leave');
+}
+
 Uint8List jpeg(int n) => Uint8List.fromList([0xFF, 0xD8, n, 0xFF, 0xD9]);
 
 void main() {
@@ -70,14 +88,25 @@ void main() {
   late List<GlassesCommand> toGlasses;
   late StreamController<AlertEvent> alerts;
   late HelperCall call;
+  late FakeAudio audio;
+  late http.Response Function() audioToken;
+  late bool audioOn;
 
   setUp(() {
+    audio = FakeAudio();
+    audioOn = true;
+    audioToken = () => http.Response(jsonEncode({'url': 'wss://lk.test', 'token': 'jwt', 'identity': 'wearer'}), 200);
     sockets = [];
     connected = [];
     cameras = FakeCameras();
     toGlasses = [];
     alerts = StreamController<AlertEvent>.broadcast(sync: true);
     final server = MockClient((r) async {
+      if (r.url.path == '/livekit-token') {
+        expect(r.method, 'GET');
+        expect(r.url.queryParameters, {'room': 'abc', 't': 'wt'});
+        return audioToken();
+      }
       expect((r.method, r.url.path), ('POST', '/rooms'));
       return http.Response(
         jsonEncode({'room': 'abc', 'wearer_token': 'wt', 'helper_url': 'https://h.test/h/abc?t=ht'}),
@@ -96,6 +125,8 @@ void main() {
         sockets.add(s);
         return s;
       },
+      audio: audio,
+      audioEnabled: () => audioOn,
       watchLifecycle: false,
     );
   });
@@ -168,6 +199,7 @@ void main() {
     expect(
       [for (final c in toGlasses) c.toJson()],
       [
+        {'t': 'live', 'on': true},
         {'t': 'guide', 'dir': 'L'},
       ],
     );
@@ -194,10 +226,14 @@ void main() {
     alerts.add(const AlertRaised(car));
     alerts.add(const PossiblyFollowing(WearerSide.behind, Duration(minutes: 3)));
     alerts.add(const PossiblyFollowing(WearerSide.behind, Duration(minutes: 4), update: true));
-    final sent = socket.texts.where((t) => t['t'] == 'alert').toList();
+    alerts.add(const SocialTapped(WearerSide.right, action: 'waving'));
+    alerts.add(const SocialTapped(WearerSide.behind, lookUp: true));
+    final sent = socket.texts.where((t) => t['t'] == 'alert' || t['t'] == 'tap').toList();
     expect(sent, [
       {'t': 'alert', 'side': 'L', 'level': 2, 'label': 'car'},
       {'t': 'alert', 'kind': 'following', 'side': 'B', 'minutes': 3},
+      {'t': 'tap', 'side': 'R', 'kind': 'social', 'action': 'waving'},
+      {'t': 'tap', 'side': 'B', 'kind': 'lookup'},
     ]);
   });
 
@@ -217,5 +253,56 @@ void main() {
     await sockets.last.drop(4410); // expired or ended
     await tick(0);
     expect(call.state, HelperState.ended);
+  });
+
+  test('the LED and call audio follow the helper; ending stops everything together', () async {
+    await call.start();
+    final socket = sockets.single;
+    socket.server({'t': 'helper', 'on': true});
+    await tick(0);
+    expect(toGlasses.single.toJson(), {'t': 'live', 'on': true});
+    expect(audio.log, ['join wss://lk.test jwt']);
+    expect(call.audioState, HelperAudioState.on);
+
+    await call.setMuted(true);
+    expect((call.muted, audio.log.last), (true, 'mute'));
+
+    socket.server({'t': 'helper', 'on': false}); // helper closed the tab
+    await tick(0);
+    expect(toGlasses.last.toJson(), {'t': 'live', 'on': false});
+    expect((audio.log.last, call.audioState, call.muted), ('leave', HelperAudioState.off, false));
+
+    socket.server({'t': 'helper', 'on': true});
+    await tick(0);
+    await call.end();
+    expect([for (final c in toGlasses) c.toJson()['on']], [true, false, true, false]);
+    expect(audio.log.last, 'leave');
+    expect(socket.closed, isTrue);
+  });
+
+  test('no audio keys, a failed join, or audio switched off: video and buzzes go on', () async {
+    audioToken = () => http.Response('{"detail": "no"}', 503);
+    await call.start();
+    sockets.single.server({'t': 'helper', 'on': true});
+    await tick(0);
+    expect(call.state, HelperState.live);
+    expect(call.audioState, HelperAudioState.unavailable);
+    expect(call.audioNote, contains("isn't set up"));
+
+    sockets.single.server({'t': 'helper', 'on': false});
+    audioToken = () => http.Response(jsonEncode({'url': 'wss://lk.test', 'token': 'jwt'}), 200);
+    audio.failJoin = Exception('no mic');
+    sockets.single.server({'t': 'helper', 'on': true});
+    await tick(0);
+    expect(call.audioState, HelperAudioState.unavailable);
+    expect(call.audioNote, contains("Couldn't start"));
+
+    sockets.single.server({'t': 'helper', 'on': false});
+    audioOn = false;
+    sockets.single.server({'t': 'helper', 'on': true});
+    await tick(0);
+    expect(call.audioState, HelperAudioState.off);
+    expect(call.audioNote, contains('off in Settings'));
+    expect(toGlasses.last.toJson(), {'t': 'live', 'on': true}); // the LED doesn't depend on audio
   });
 }

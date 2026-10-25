@@ -13,6 +13,6 @@ export default defineConfig({
     },
   }],
   build: { outDir: '../backend/static', emptyOutDir: false, rollupOptions: { input: 'helper.html' } },
-  server: { proxy: { '/ws': { target: 'ws://localhost:8020', ws: true }, '/rooms': 'http://localhost:8020', '/room-info': 'http://localhost:8020' } },
+  server: { proxy: { '/ws': { target: 'ws://localhost:8020', ws: true }, '/rooms': 'http://localhost:8020', '/room-info': 'http://localhost:8020', '/livekit-token': 'http://localhost:8020' } },
   test: { environment: 'jsdom' },
 });

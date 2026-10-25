@@ -24,9 +24,12 @@ import 'package:omni_glasses/social/social_store.dart';
 import 'package:omni_glasses/social/together_time.dart';
 import 'package:omni_glasses/vision/detector.dart';
 import 'package:omni_glasses/vision/fire_namer.dart';
+import 'package:omni_glasses/settings/feature_flags.dart';
 import 'package:omni_glasses/vision/rear_vision.dart';
 import 'package:provider/provider.dart';
 
+
+import 'captions_test.dart' show fakeCaptions;
 import 'social_test.dart' show FakeRadio, FixedRings, signedInStore;
 
 Future<AlertService> pumpApp(
@@ -70,6 +73,8 @@ Future<AlertService> pumpApp(
   await tester.pumpWidget(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: FeatureFlags()),
+        ChangeNotifierProvider.value(value: fakeCaptions()),
         ChangeNotifierProvider.value(value: link),
         ChangeNotifierProvider.value(value: vision),
         ChangeNotifierProvider.value(value: alerts),

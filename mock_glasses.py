@@ -14,7 +14,10 @@ Protocol (one JSON message per UDP datagram):
     frame  -> app   {"t":"sens","dist":34,"blink":0,"yaw_rate":12,"lux":850,"batt":82}
     frame  -> app   {"t":"fire","side":"L","k":812}
     app -> frame    alert, tap, groupbreak, stop, hb (every 250 ms),
-                    guide {"dir":"L"|"R"|"fwd"|"stop"} (Call a helper; printed with its buzz)
+                    guide {"dir":"L"|"R"|"fwd"|"stop"} (Call a helper),
+                    live {"on":true|false} (front LED while a helper watches),
+                    nudge {"kind":"close"|"break"} (eye-health)
+                    Each is printed with the buzz (or LED) the real frame plays.
 
 The app listens on UDP port 4210 and learns each device's address from the
 sender of its hello, so it replies to whatever address and port the hello came
@@ -29,10 +32,14 @@ Type a command and press Enter while it runs:
     read        close-up work, dist ~30 cm      up    looking up, dist ~250 cm
     out         daylight, lux ~20000            in    indoors, lux ~400
     drop        stop sending sens for 5 s (to test the link-lost banner)
+    person [l|r|c]  someone walks up behind the wearer (left, right or center),
+                stops for 8 s, then leaves: a social tap. Use "read" first for a
+                "look up" tap. Needs ultralytics' bus.jpg (or --person-image).
     q           quit
 """
 
 import argparse
+import glob
 import http.server
 import json
 import math
@@ -45,6 +52,7 @@ import time
 
 import cv2
 import numpy as np
+from pathlib import Path
 
 APP_PORT = 4210      # the app listens here
 FRAME_PORT = 4211    # frame ESP32 sends from and listens on this port
@@ -60,7 +68,8 @@ HB_TIMEOUT = 1.0     # seconds without hb before the frame decides the phone is 
 class Camera:
     """Keeps only the newest 320x240 JPEG. Falls back to a test pattern."""
 
-    def __init__(self, index, synthetic):
+    def __init__(self, index, synthetic, person=None):
+        self.person = person                            # PersonScene drawn over the picture
         self.cap = None if synthetic else cv2.VideoCapture(index)
         if self.cap is not None and not self.cap.isOpened():
             print(f"[camA] camera {index} did not open, using a test pattern")
@@ -81,6 +90,8 @@ class Camera:
             else:
                 img = test_pattern(time.time() - t0)
                 time.sleep(1 / 15)
+            if self.person is not None:
+                img = self.person.draw(img, time.time())
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok:
                 with self.lock:
@@ -100,6 +111,74 @@ def test_pattern(t):
     cv2.rectangle(img, (cx - half, 120 - half), (cx + half, 120 + half), (40, 40, 200), -1)
     cv2.putText(img, f"mock camA {t:6.1f}s", (8, 228), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     return img
+
+
+def find_person_image(path=None):
+    """A photo with a whole standing person: --person-image, or ultralytics' bus.jpg."""
+    if path:
+        return path
+    try:
+        import ultralytics
+        candidates = [str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg")]
+    except ImportError:
+        candidates = []
+    candidates += glob.glob(str(Path.home() / ".cache" / "*" / "lib" / "python*" / "site-packages"
+                                / "ultralytics" / "assets" / "bus.jpg"))
+    return next((c for c in candidates if Path(c).exists()), None)
+
+
+class PersonScene:
+    """Someone walks up to the rear camera, stops close, waits, then leaves.
+
+    The rear camera faces backward, so the wearer's LEFT is the RIGHT of the image.
+    Approach 4 s (box height 30% -> 98% of the image, cut at the bottom like
+    someone ~1 m away), stay 8 s, gone.
+    """
+
+    APPROACH_S, STAY_S = 4.0, 8.0
+    BOX = (48, 399, 245, 903)       # the left-hand person in bus.jpg, (x0, y0, x1, y1)
+
+    def __init__(self, image_path):
+        img = cv2.imread(image_path) if image_path else None
+        if img is None:
+            self.crop = None
+            return
+        x0, y0, x1, y1 = self.BOX
+        self.crop = img[y0:y1, x0:x1]
+        self.start = None
+        self.center = 0.5
+
+    def begin(self, side):
+        if self.crop is None:
+            print("[camA] person: no picture of a person. Install ultralytics or pass --person-image")
+            return
+        self.center = {"l": 0.78, "r": 0.22}.get(side, 0.5)
+        self.start = time.time()
+        where = {"l": "behind left", "r": "behind right"}.get(side, "straight behind")
+        print(f"[camA] person: walking up {where}, stopping for {self.STAY_S:.0f} s")
+
+    def draw(self, img, now):
+        if self.start is None:
+            return img
+        t = now - self.start
+        if t > self.APPROACH_S + self.STAY_S:
+            self.start = None
+            print("[camA] person: gone")
+            return img
+        grow = min(1.0, t / self.APPROACH_S)
+        h_img, w_img = img.shape[:2]
+        h = int(h_img * (0.3 + 0.75 * grow))         # ends a little taller than the image: cut off
+        w = int(h * self.crop.shape[1] / self.crop.shape[0])
+        person = cv2.resize(self.crop, (w, h))
+        x0 = int(self.center * w_img - w / 2)
+        y0 = int(h_img * (0.55 - 0.5 * grow))        # feet drop out of view as they come closer
+        out = img.copy()
+        sx0, sy0 = max(0, -x0), max(0, -y0)
+        dx0, dy0 = max(0, x0), max(0, y0)
+        dx1, dy1 = min(w_img, x0 + w), min(h_img, y0 + h)
+        if dx1 > dx0 and dy1 > dy0:
+            out[dy0:dy1, dx0:dx1] = person[sy0:sy0 + dy1 - dy0, sx0:sx0 + dx1 - dx0]
+        return out
 
 
 def make_stream_handler(camera):
@@ -192,10 +271,7 @@ def receive_loop(sock, state):
                 print(f"[frame] hb x{hb_count} in the last {time.time() - hb_window:.0f} s")
                 hb_count, hb_window = 0, time.time()
             continue
-        if msg.get("t") == "guide":
-            print(f"[frame] GUIDE {GUIDE_BUZZ.get(msg.get('dir'), '? unknown direction')}")
-            continue
-        print(f"[frame] <- {json.dumps(msg)}")
+        print(f"[frame] <- {describe(msg)}")
 
 
 # Guidance from a remote helper: long pulses, so it never feels like an
@@ -208,6 +284,44 @@ GUIDE_BUZZ = {
 }
 
 
+SIDES = {"L": "left motor", "R": "right motor", "B": "both motors"}
+
+# Social and eye-health patterns are soft (about 40% strength) so they never
+# feel like a warning. A safety alert always wins over all of them.
+TAP_BUZZ = {
+    "social": "two soft short taps (60 ms, gap 120 ms)",
+    "lookup": "two soft short taps, then one soft 300 ms pulse on both motors (\"look up\")",
+}
+NUDGE_BUZZ = {
+    "close": "one slow soft pulse (500 ms) on both motors",
+    "break": "three slow soft pulses (300 ms, gap 300 ms) on both motors",
+}
+
+
+def describe(msg):
+    """One readable line for a message from the app, with the buzz it means."""
+    t = msg.get("t")
+    side = SIDES.get(msg.get("side"), f"? side {msg.get('side')!r}")
+    if t == "alert":
+        level = msg.get("level")
+        buzz = "three strong pulses (150 ms apart)" if level == 2 else "one pulse"
+        return f"ALERT {'urgent' if level == 2 else 'gentle'} {msg.get('label', '?')}: {side}, {buzz}"
+    if t == "stop":
+        return "STOP: motors off"
+    if t == "tap":
+        kind = msg.get("kind", "social")
+        return f"TAP {kind}: {side}, {TAP_BUZZ.get(kind, '? unknown kind')}"
+    if t == "guide":
+        return f"GUIDE {GUIDE_BUZZ.get(msg.get('dir'), '? unknown direction')}"
+    if t == "live":
+        return "LIVE: front LED ON (a helper is watching)" if msg.get("on") else "LIVE: front LED off"
+    if t == "nudge":
+        return f"NUDGE {msg.get('kind')}: {NUDGE_BUZZ.get(msg.get('kind'), '? unknown kind')}"
+    if t == "groupbreak":
+        return "GROUP BREAK: break reminder pattern"
+    return json.dumps(msg)
+
+
 def watch_heartbeat(state):
     while True:
         time.sleep(0.2)
@@ -217,7 +331,7 @@ def watch_heartbeat(state):
             state["phone_lost"] = True
 
 
-def read_commands(wearer, fire_queue, stop):
+def read_commands(wearer, fire_queue, stop, person):
     for line in sys.stdin:
         cmd = line.strip().lower()
         now = time.time()
@@ -237,11 +351,13 @@ def read_commands(wearer, fire_queue, stop):
         elif cmd == "drop":
             wearer.drop_until = now + 5
             print("[frame] sens paused for 5 s")
+        elif cmd.split()[:1] == ["person"]:
+            person.begin(cmd.split()[1] if len(cmd.split()) > 1 else "c")
         elif cmd == "q":
             stop.set()
             return
         elif cmd:
-            print("commands: fl fr turn l|r read up out in drop q")
+            print("commands: fl fr turn l|r read up out in drop person [l|r|c] q")
     # stdin closed (for example run in the background): keep running until Ctrl-C
 
 
@@ -256,6 +372,7 @@ def main(argv=None):
     ap.add_argument("--auto-fire", type=float, default=0,
                     help="send a fire on a random side every N seconds (default off)")
     ap.add_argument("--show-hb", action="store_true", help="print a heartbeat count every 5 s")
+    ap.add_argument("--person-image", help="photo for the 'person' command (default: ultralytics' bus.jpg)")
     args = ap.parse_args(argv)
 
     try:
@@ -263,7 +380,8 @@ def main(argv=None):
         frame_sock.bind(("0.0.0.0", FRAME_PORT))
         cam_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         cam_sock.bind(("0.0.0.0", CAMA_PORT))
-        camera = Camera(args.camera, args.no_camera)
+        person = PersonScene(find_person_image(args.person_image))
+        camera = Camera(args.camera, args.no_camera, person)
         httpd = ThreadingHTTPServer(("0.0.0.0", args.http_port), make_stream_handler(camera))
     except OSError as e:
         sys.exit(f"{e}\nAnother mock_glasses.py is probably still running. Find it with:\n"
@@ -277,11 +395,11 @@ def main(argv=None):
     stop = threading.Event()
     threading.Thread(target=receive_loop, args=(frame_sock, state), daemon=True).start()
     threading.Thread(target=watch_heartbeat, args=(state,), daemon=True).start()
-    threading.Thread(target=read_commands, args=(wearer, fire_queue, stop), daemon=True).start()
+    threading.Thread(target=read_commands, args=(wearer, fire_queue, stop, person), daemon=True).start()
 
     print(f"[camA]  MJPEG on http://0.0.0.0:{args.http_port}/stream")
     print(f"[frame] UDP from port {FRAME_PORT} to {phone[0]}:{phone[1]}")
-    print("commands: fl fr turn l|r read up out in drop q")
+    print("commands: fl fr turn l|r read up out in drop person [l|r|c] q")
 
     next_hello = next_auto_fire = time.time()
     if args.auto_fire:

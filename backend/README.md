@@ -34,8 +34,8 @@ Camera URLs are in `config.yaml` (`http://eye-cam.local:81/stream`,
 dashboard shows **"EYE camera offline"** / **"FRONT camera offline"** and the backend
 retries every 3 s.
 
-- Dashboard: <http://localhost:8000/> (on a phone on the same hotspot:
-  `http://<laptop-ip>:8000/`). API docs: <http://localhost:8000/docs>.
+- Dashboard: <http://localhost:8001/> (on a phone on the same hotspot:
+  `http://<laptop-ip>:8001/`). API docs: <http://localhost:8001/docs>.
 - The first 5 s with the eye in view are eye calibration: keep the eye open and look
   ahead normally. For distance, sit at a known distance from the screen (say 50 cm)
   and press *Calibrate distance…*.
@@ -114,7 +114,20 @@ estimated delay (phone/browser clock differences affect it), front/rear switchin
 haptic directions (arrow keys, Space to stop), reconnect status, and an event feed.
 Movement directions disable after three seconds without a frame; Stop remains
 available while the wearer is connected. End closes the room even if the wearer
-has disconnected. Mute is disabled until LiveKit audio is implemented.
+has disconnected. Join also starts two-way audio (below); Mute and "who is
+speaking" are on the page.
+
+**Call audio (LiveKit Cloud).** `GET /livekit-token?room=<id>&t=<wearer or
+helper token>` checks our room token and returns `{"url", "token", "identity"}`
+for the LiveKit room `omni-<id>` (mic only, expires with the room). Keys come
+from `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in the
+environment or the repo's `.env`. Without them it answers 503 and calls carry
+on with video and buzzes. Needs `livekit-api` in the environment that runs the
+server:
+
+```bash
+uv pip install --python social/.venv/bin/python livekit-api==1.2.2
+```
 
 `POST /rooms` accepts an optional JSON `wearer_name` (up to 80 characters).
 `GET /room-info/<room>?t=...` returns that name and expiry to the helper only;
@@ -157,6 +170,10 @@ python -m unittest discover -s backend/tests -t .
 | `screentime.py` | Mac frontmost-app tracker (real), iOS sample data (mock), correlation |
 | `facetime.py` | OBS scene switch for FaceTime |
 | `app_bridge.py` | UDP protocol for `mobile-app/` + MJPEG on :81 |
+| `muse_client.py` | Muse Spark (Meta Model API) client with the spending cap |
+| `vlm.py` | The shared VLM service: per-feature prompt, JSON schema and 4 s timeout |
+| `helper.py` | Call a helper: rooms, video/command relay, LiveKit tokens |
+| `captions.py` | Live captions relay to Muse Voice Transcribe (holds the key); `--mock` and `--wav` test modes |
 | `api.py` | FastAPI routes + WebSocket `/ws/live` |
 | `main.py` | Runs everything |
 | `static/index.html` | Dashboard (no build step, no CDN) |
@@ -179,6 +196,9 @@ python -m unittest discover -s backend/tests -t .
 | POST | `/distance/device` | `{"device": "laptop"\|"phone"}` (threshold 50 / 30 cm) |
 | GET | `/screentime`, `/screentime/correlation` | Mac usage (real), iOS (mock), blink rate per app |
 | GET/POST | `/facetime`, `/facetime/switch` | `{"target": "glasses"\|"mac"\|"toggle"}` |
+| POST | `/vlm/{feature}` | `{"images": [{"camera": "rear"\|"front", "jpeg": "<base64>"}], "use_front": false}` → `{"feature", "result", "latency_s", "model"}`. Features: `social_confirm` `{"engaging", "action"}`, `describe` `{"summary"}`. 400 bad request, 503 Muse unavailable |
+| GET | `/livekit-token?room=&t=` | Call audio token for the wearer or helper (503 without LiveKit keys) |
+| WS | `/ws/captions` | Live captions: `{"type":"start",...}`, then binary 16 kHz PCM up, Meta's caption events down. Protocol at the top of `captions.py` |
 | WS | `/ws/live` | `{"type":"live",...}` every 0.5 s, `{"type":"event",...}` as they happen |
 
 CORS is open (`*`) so the Flutter app can call it from a phone.

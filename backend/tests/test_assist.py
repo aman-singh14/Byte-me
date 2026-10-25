@@ -203,6 +203,29 @@ class Flow(unittest.TestCase):
         self.assertEqual(full_w, 640)
         self.assertLess(shape[1], 640)
 
+    def test_voice_questions_always_use_fresh_eye_gaze(self):
+        a = self.make()
+        a.gaze.smoothed = "right"
+        a.gaze.observed_at = time.time()
+        r = a.look("Read the label on the left", require_gaze=True)
+        self.assertEqual((r["region"], r["region_source"]), ("right", "gaze"))
+        self.assertEqual(r["question"], "Read the label on the left")
+        self.assertEqual(a.look("Describe everything", require_gaze=True)["region"], "right")
+
+    def test_voice_questions_refuse_missing_stale_or_calibrating_gaze(self):
+        a = self.make()
+        with self.assertRaisesRegex(ValueError, "inward-facing"):
+            a.look("Read that sign", require_gaze=True)
+        a.gaze.smoothed = "left"
+        a.gaze.observed_at = time.time() - 10
+        with self.assertRaises(ValueError):
+            a.look("Read that sign", require_gaze=True)
+        a.gaze.observed_at = time.time()
+        a.gaze.start_calibration()
+        with self.assertRaises(ValueError):
+            a.look("Read that sign", require_gaze=True)
+        self.assertEqual(a.detector.calls, [])
+
     def test_question_overrides_gaze(self):
         a = self.make()
         a.gaze.smoothed = "right"

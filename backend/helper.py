@@ -11,6 +11,13 @@ memory only: never written to disk, never logged.
     GET  /h/{room}?t=<helper token>    the helper page
     WS   /ws/wearer/{room}?t=          app:    binary frames + JSON events up, commands down
     WS   /ws/helper/{room}?t=          helper: newest frame + events down, commands up
+    GET  /livekit-token?room=&t=       a LiveKit token for two-way call audio (either side's token)
+
+Audio goes through LiveKit Cloud, not this server: each side asks for a token here
+(our room token proves it belongs to the room) and joins the LiveKit room
+"omni-<room id>". Keys come from LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET
+in the environment or the repo's .env. Without them calls work with video and
+buzzes only. LiveKit doesn't record unless asked to, and we never ask.
 
 Wearer -> server, binary: 1 byte camera ('F' front, 'R' rear) + 8-byte big-endian
 timestamp (ms since epoch) + the JPEG, forwarded byte for byte. The server
@@ -31,7 +38,9 @@ on another network:
 
 import asyncio
 import collections
+import datetime
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -52,6 +61,39 @@ CLOSE_TAKEN = 4409
 CLOSE_ENDED = 4410
 
 PAGE = Path(__file__).resolve().parent / "static" / "helper.html"
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+
+def env(name, env_file=None):
+    """A setting from the environment, else from the repo's .env (gitignored)."""
+    if os.environ.get(name):
+        return os.environ[name]
+    try:
+        for line in Path(env_file or ENV_FILE).read_text().splitlines():
+            key, _, value = line.strip().partition("=")
+            if key.strip() == name and value.strip() and not line.lstrip().startswith("#"):
+                return value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def livekit_token(room, role, now, settings=env):
+    """{"url", "token", "identity"} for [role] in [room]'s audio, or None if LiveKit isn't set up."""
+    url, key, secret = (settings(n) for n in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"))
+    if not (url and key and secret):
+        return None
+    from livekit import api  # optional: only needed for audio
+    ttl = max(60, int(room.expires_at - now))
+    jwt = (api.AccessToken(key, secret)
+           .with_identity(role)
+           .with_name("Wearer" if role == "wearer" else "Helper")
+           .with_ttl(datetime.timedelta(seconds=ttl))
+           .with_grants(api.VideoGrants(room_join=True, room=f"omni-{room.id}", can_publish=True,
+                                        can_subscribe=True, can_publish_data=False,
+                                        can_publish_sources=["microphone"]))
+           .to_jwt())
+    return {"url": url, "token": jwt, "identity": role}
 
 
 def _message_page(title, text, status=200):
@@ -240,6 +282,17 @@ def router(rooms):
             return _message_page("This call has ended", "Ask for a new link.", 404)
         return JSONResponse({"wearer_name": room.wearer_name, "expires_at": room.expires_at},
                             headers={"Cache-Control": "no-store"})
+
+    @r.get("/livekit-token")
+    def audio_token(room: str = "", t: str = ""):
+        found = rooms.get(room)
+        role = next((role for role in ("wearer", "helper") if found and found.token_ok(role, t)), None)
+        if role is None:
+            return JSONResponse({"detail": "This call has ended."}, status_code=404)
+        token = livekit_token(found, role, rooms.clock())
+        if token is None:
+            return JSONResponse({"detail": "Call audio isn't set up on this server."}, status_code=503)
+        return JSONResponse(token, headers={"Cache-Control": "no-store"})
 
     @r.get("/h/{room_id}", response_class=HTMLResponse)
     def helper_page(room_id: str, t: str = ""):

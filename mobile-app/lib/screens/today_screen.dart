@@ -7,8 +7,10 @@ import 'package:provider/provider.dart';
 import '../alerts/alert_service.dart';
 import '../components/common.dart';
 import '../components/event_log.dart';
+import '../settings/feature_flags.dart';
 import '../theme/theme.dart';
 import 'alert_widgets.dart';
+import 'captions_widgets.dart';
 import 'ask_widgets.dart';
 import 'home_shell.dart';
 import 'together_widgets.dart';
@@ -22,7 +24,8 @@ class TodayScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final following = context.watch<AlertService>().following;
+    final alerts = context.watch<AlertService>();
+    final following = alerts.following;
     return TabPage(
       title: 'Today',
       linkBanner: false,
@@ -36,7 +39,9 @@ class TodayScreen extends StatelessWidget {
       children: [
         const LiveStatusStrip(),
         const AskCard(),
+        if (context.watch<FeatureFlags>()[Feature.captions]) const CaptionsQuickCard(),
         const RingsCard(),
+        if (alerts.socialTap != null) const LiveSocialTapCard(),
         if (following != null) const LiveFollowingCard(),
         const HelperCallCard(),
         const _AwarenessCard(),
@@ -47,7 +52,7 @@ class TodayScreen extends StatelessWidget {
   }
 }
 
-/// Last alert with its time and side. "Who's around me?" comes in phase 2.
+/// Last alert or social tap with its time and side. "Who's around me?" comes in phase 2.
 class _AwarenessCard extends StatelessWidget {
   const _AwarenessCard();
 

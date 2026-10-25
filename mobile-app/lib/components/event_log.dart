@@ -61,6 +61,11 @@ class LogEntryRow extends StatelessWidget {
           case ClearReason.gone || null:
             break;
         }
+      case LogKind.social:
+        icon = Symbols.waving_hand_rounded;
+        title = 'Someone stopped ${direction.short}';
+        if (e.label != 'person') details.add(e.label);
+        sentence = 'Someone stopped ${direction.phrase}, at $time.';
       case LogKind.following:
         icon = Symbols.person_alert_rounded;
         title = 'Someone stayed ${direction.short}';

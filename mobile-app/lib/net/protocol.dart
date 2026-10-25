@@ -154,7 +154,8 @@ class AlertCommand extends GlassesCommand {
   Map<String, Object> toJson() => {'t': 'alert', 'side': side.wire, 'level': level, 'label': label};
 }
 
-/// Social tap: someone stopped to talk. [kind] is "social" or "lookup".
+/// Social tap: someone stopped to talk. [kind] is "social", or "lookup"
+/// during close-up work (a pattern that also says "look up").
 class TapCommand extends GlassesCommand {
   const TapCommand({required this.side, this.kind = 'social'});
   final WearerSide side;
@@ -184,6 +185,16 @@ class GuideCommand extends GlassesCommand {
 
   @override
   Map<String, Object> toJson() => {'t': 'guide', 'dir': dir.wire};
+}
+
+/// A remote helper is watching ([on]) or not: the front LED shows it, so
+/// people around the wearer can tell.
+class LiveCommand extends GlassesCommand {
+  const LiveCommand({required this.on});
+  final bool on;
+
+  @override
+  Map<String, Object> toJson() => {'t': 'live', 'on': on};
 }
 
 class GroupBreakCommand extends GlassesCommand {

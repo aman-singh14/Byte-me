@@ -48,6 +48,7 @@ class GazeTracker:
         self.history = collections.deque()               # (t, raw label)
         self.smoothed = None
         self.last_pupil = None
+        self.observed_at = None
         self._steps = []                                 # remaining calibration steps
         self._step = None                                # (region, t_start, samples)
         self.on_calibrated = None                        # callback(centroids)
@@ -134,6 +135,7 @@ class GazeTracker:
         if self.calibrating:
             self._advance_calibration(pupil, t)
         if pupil is not None and not self.calibrating:
+            self.observed_at = t
             self.history.append((t, self.classify_raw(pupil)))
         while self.history and self.history[0][0] < t - self.window_s:
             self.history.popleft()

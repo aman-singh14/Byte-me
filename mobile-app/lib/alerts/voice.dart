@@ -24,6 +24,7 @@ class TtsVoice implements Voice {
         IosTextToSpeechAudioCategoryOptions.interruptSpokenAudioAndMixWithOthers,
       ], IosTextToSpeechAudioMode.voicePrompt);
     }
+    await _tts.awaitSpeakCompletion(true);
     await _tts.setSpeechRate(Platform.isIOS ? 0.55 : 0.6); // a little brisk
   }
 

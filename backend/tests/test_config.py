@@ -57,7 +57,7 @@ class DevConfig(unittest.TestCase):
         self.assertEqual(cfg["rear"]["mode"], "fpga")             # mock FPGA in dev
         # Untouched product values survive the merge.
         self.assertEqual(cfg["distance"]["too_close_cm"], {"laptop": 50, "phone": 30})
-        self.assertEqual(cfg["api"]["port"], 8000)
+        self.assertEqual(cfg["api"]["port"], 8001)
 
     def test_dev_gaze_defaults_match_a_facing_webcam(self):
         g = load_config(dev=True)["gaze"]

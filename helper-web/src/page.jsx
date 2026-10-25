@@ -1,16 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Room, RoomEvent, Track } from 'livekit-client';
 
 const directions = { ArrowLeft: 'L', ArrowUp: 'fwd', ArrowRight: 'R', ' ': 'stop' };
 const names = { L: 'Left', fwd: 'Forward', R: 'Right', stop: 'Stop' };
 export function describe(event) {
   const side = { L: 'behind them, left', R: 'behind them, right', B: 'behind them' }[event.side] || 'near them';
   if (event.kind === 'following') return `Someone has been ${side} for ${event.minutes || 3} minutes.`;
-  if (event.t === 'tap') return `Someone ${event.kind === 'stopped' ? 'stopped' : 'tapped'} ${side}.`;
+  if (event.t === 'tap') {
+    const doing = typeof event.action === 'string' && event.action.trim() ? ` (${event.action.trim()})` : '';
+    const lookUp = event.kind === 'lookup' ? ' They were asked to look up.' : '';
+    return `Someone stopped ${side}${doing}.${lookUp}`;
+  }
   if (event.t === 'alert') return `${event.level === 2 ? 'Urgent: ' : ''}${event.label || 'Something'} approaching ${side}.`;
   return null;
 }
 export function HelperPage() {
-  const room = location.pathname.split('/').pop();
+  const roomId = location.pathname.split('/').pop();
   const token = new URLSearchParams(location.search).get('t') || '';
   const [name, setName] = useState(null);
   const [phase, setPhase] = useState('ready');
@@ -24,7 +29,13 @@ export function HelperPage() {
   const [since, setSince] = useState(null);
   const [lastFrameAt, setLastFrameAt] = useState(0);
   const [lastGuide, setLastGuide] = useState(null);
+  const [audio, setAudio] = useState('off');
+  const [audioNote, setAudioNote] = useState(null);
+  const [muted, setMuted] = useState(false);
+  const [speaking, setSpeaking] = useState([]);
+  const [needsTap, setNeedsTap] = useState(false);
   const socket = useRef(null), retry = useRef(null), url = useRef(null), stopped = useRef(false);
+  const room = useRef(null), sounds = useRef(null);
   const feedId = useRef(0);
   const addEvent = text => setEvents(old => [{ id: ++feedId.current, at: Date.now(), text }, ...old].slice(0, 30));
   const clearFrame = () => {
@@ -33,7 +44,7 @@ export function HelperPage() {
   };
   useEffect(() => {
     const abort = new AbortController();
-    fetch(`/room-info/${encodeURIComponent(room)}?t=${encodeURIComponent(token)}`, { signal: abort.signal, cache: 'no-store' })
+    fetch(`/room-info/${encodeURIComponent(roomId)}?t=${encodeURIComponent(token)}`, { signal: abort.signal, cache: 'no-store' })
       .then(r => { if (r.status === 404) setPhase('ended'); return r.ok ? r.json() : null; })
       .then(info => { if (info) setName(info.wearer_name); })
       .catch(() => {}); // A temporary metadata failure must not end a valid call.
@@ -41,7 +52,7 @@ export function HelperPage() {
   }, []);
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => { clearInterval(tick); stopped.current = true; clearTimeout(retry.current); socket.current?.close(); if (url.current) URL.revokeObjectURL(url.current); };
+    return () => { clearInterval(tick); stopped.current = true; clearTimeout(retry.current); socket.current?.close(); stopAudio(); if (url.current) URL.revokeObjectURL(url.current); };
   }, []);
   function send(message) {
     if (socket.current?.readyState !== WebSocket.OPEN) return false;
@@ -49,12 +60,52 @@ export function HelperPage() {
   }
   function finish(next = 'ended') {
     stopped.current = true; clearTimeout(retry.current); setWearer(false); clearFrame();
-    setPhase(next); socket.current?.close();
+    setPhase(next); socket.current?.close(); stopAudio();
+  }
+  // Two-way audio through LiveKit. Started from the Join click, so the browser
+  // lets it use the microphone and play the wearer's voice.
+  async function startAudio() {
+    setAudio('connecting'); setAudioNote(null);
+    try {
+      const r = await fetch(`/livekit-token?room=${encodeURIComponent(roomId)}&t=${encodeURIComponent(token)}`, { cache: 'no-store' });
+      if (stopped.current) return;
+      if (r.status === 503) { setAudio('unavailable'); setAudioNote("Audio isn't set up for this call. Video and directions still work."); return; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { url: server, token: jwt } = await r.json();
+      const lk = new Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      room.current = lk;
+      lk.on(RoomEvent.TrackSubscribed, track => {
+        if (track.kind !== Track.Kind.Audio) return;
+        const element = track.attach(); sounds.current?.appendChild(element);
+      });
+      lk.on(RoomEvent.TrackUnsubscribed, track => track.detach().forEach(element => element.remove()));
+      lk.on(RoomEvent.ActiveSpeakersChanged, speakers => setSpeaking(speakers.map(p => p.identity)));
+      lk.on(RoomEvent.AudioPlaybackStatusChanged, () => setNeedsTap(!lk.canPlaybackAudio));
+      lk.on(RoomEvent.Disconnected, () => { if (room.current === lk) { setAudio('off'); setSpeaking([]); } });
+      await lk.connect(server, jwt);
+      if (stopped.current || room.current !== lk) { lk.disconnect(); return; }
+      await lk.localParticipant.setMicrophoneEnabled(true);
+      setMuted(false); setAudio('on'); setNeedsTap(!lk.canPlaybackAudio);
+    } catch (error) {
+      if (stopped.current) return;
+      room.current?.disconnect(); room.current = null;
+      setAudio('unavailable');
+      setAudioNote(error?.name === 'NotAllowedError' ? 'Microphone blocked. Allow it in your browser to talk.' : "Couldn't start audio. Video and directions still work.");
+    }
+  }
+  function stopAudio() {
+    const lk = room.current; room.current = null;
+    lk?.disconnect(); setAudio('off'); setSpeaking([]); setNeedsTap(false);
+  }
+  async function toggleMute() {
+    const lk = room.current; if (!lk || audio !== 'on') return;
+    const next = !muted; setMuted(next);
+    await lk.localParticipant.setMicrophoneEnabled(!next);
   }
   function connect() {
     if (stopped.current) return;
     setPhase('connecting');
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/helper/${encodeURIComponent(room)}?t=${encodeURIComponent(token)}`);
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/helper/${encodeURIComponent(roomId)}?t=${encodeURIComponent(token)}`);
     socket.current = ws; ws.binaryType = 'arraybuffer';
     ws.onopen = () => { if (!stopped.current) setPhase('connected'); };
     ws.onmessage = message => {
@@ -113,16 +164,21 @@ export function HelperPage() {
   const timer = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
   const status = { ready: 'Ready when you are', connecting: 'Connecting…', reconnecting: 'Connection lost · reconnecting…', ended: 'This call has ended', taken: 'Someone else is already helping' }[phase] || (wearer ? (fresh ? 'Connected' : 'Waiting for camera…') : 'Waiting for the wearer…');
   const ended = ['ended', 'taken'].includes(phase);
+  const wearerTalking = speaking.includes('wearer'), youTalking = speaking.includes('helper') && !muted;
+  const audioTitle = { on: muted ? 'You are muted' : 'Audio on', connecting: 'Connecting audio…', unavailable: 'No audio', off: 'Audio off' }[audio];
+  const audioDetail = audio === 'on'
+    ? (wearerTalking ? `${name || 'The wearer'} is speaking` : youTalking ? 'You are speaking' : 'Nobody is speaking')
+    : audioNote || 'Video & haptic guidance are available.';
   return <main>
     <header><a className="wordmark" href="#">◉ <span>omni</span></a><span className="eyebrow">CALL A HELPER</span><span className="private">Private session</span></header>
     {phase === 'ready' || ended ? <section className="join panel">
       <span className="eyebrow">A LITTLE HELP. A SHARED VIEW.</span>
       <h1>{ended ? status : name ? `Be there for ${name}.` : 'Be their eyes for a moment.'}</h1>
       {ended ? <p>{phase === 'taken' ? 'Only one helper can join at a time. Ask the wearer for another link when they are ready.' : 'The live view is closed. Ask the wearer for a new link to help again.'}</p> : <>
-        <p>{name ? `You'll see ${name}'s glasses live.` : "You'll see the wearer's glasses live."} Nothing is recorded.</p>
-        <p className="secondary">Send gentle directions with the buttons or your keyboard. Two-way audio is coming soon.</p>
-        <button className="primary" onClick={() => { stopped.current = false; connect(); }}>Join call <span aria-hidden="true">↗</span></button>
-        <small>Joining starts the live camera. You can end the call at any time.</small>
+        <p>{name ? `You'll see and hear ${name}'s glasses live.` : "You'll see and hear the wearer's glasses live."} Nothing is recorded.</p>
+        <p className="secondary">Talk with them, and send gentle directions with the buttons or your keyboard.</p>
+        <button className="primary" onClick={() => { stopped.current = false; connect(); startAudio(); }}>Join call <span aria-hidden="true">↗</span></button>
+        <small>Joining starts the live camera and your microphone. You can mute or end the call at any time.</small>
       </>}
     </section> : <>
       <section className="heading"><div><span className="eyebrow">YOU’RE HERE TO HELP</span><h1>{name ? `With ${name}` : 'A shared point of view'}</h1></div><button className="end" onClick={() => { send({ t: 'end' }); finish(); }}>End call</button></section>
@@ -135,7 +191,8 @@ export function HelperPage() {
         <div className="arrows" role="group" aria-label="Haptic guidance">{[['L', '←', 'Left arrow'], ['fwd', '↑', 'Up arrow'], ['R', '→', 'Right arrow']].map(([dir, arrow, key]) => <button key={dir} disabled={!fresh} aria-label={`Guide ${names[dir].toLowerCase()} (${key})`} onClick={() => guide(dir)}><span aria-hidden="true">{arrow}</span>{names[dir]}</button>)}</div>
         <button className="stop" disabled={!live} aria-label="Stop the wearer (Space)" onClick={() => guide('stop')}><span aria-hidden="true">■</span> Stop <kbd>Space</kbd></button>
         <p className="keyhint">Arrow keys to guide · Space to stop</p><p className="sent" role="status">{lastGuide ? `${lastGuide} guidance sent` : 'Ready to send a direction'}</p>
-        <div className="audio"><span aria-hidden="true">♩</span><div><strong>Audio coming soon</strong><small>Video & haptic guidance are available.</small></div><button disabled aria-label="Mute microphone (audio not available yet)">Mute</button></div>
+        <div className="audio"><span aria-hidden="true">{audio === 'on' && !muted ? '♪' : '♩'}</span><div role="status"><strong>{audioTitle}</strong><small>{audioDetail}</small></div>{needsTap ? <button onClick={() => room.current?.startAudio().then(() => setNeedsTap(false))}>Hear them</button> : <button disabled={audio !== 'on'} aria-pressed={muted} onClick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button>}</div>
+        <div ref={sounds} hidden />
       </aside></div>
       <section className="panel events"><div><h2>Along the way</h2><span className="secondary">Alerts from the glasses</span></div><ul aria-live="polite" aria-relevant="additions">{events.length ? events.map(event => <li key={event.id}><time>{new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time><span>{event.text}</span></li>) : <li className="secondary">No alerts yet. You’re all caught up.</li>}</ul></section>
       <footer>Nothing is recorded. <span>Directions always refer to the wearer’s left and right.</span></footer>

@@ -1,6 +1,23 @@
 {
-  "name": "omni-helper", "private": true, "version": "0.1.0", "type": "module",
-  "scripts": {"dev": "vite --host 127.0.0.1", "build": "vite build", "test": "vitest run"},
-  "dependencies": {"react": "^19.2.0", "react-dom": "^19.2.0"},
-  "devDependencies": {"vite": "^7.2.0", "vite-plugin-singlefile": "^2.3.0", "vitest": "^3.2.0", "jsdom": "^26.1.0", "@testing-library/react": "^16.3.0"}
+  "name": "omni-helper",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "livekit-client": "^2.23.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "jsdom": "^26.1.0",
+    "vite": "^7.2.0",
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^3.2.0"
+  }
 }

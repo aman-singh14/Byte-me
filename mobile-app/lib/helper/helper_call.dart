@@ -9,6 +9,10 @@
 // come back on the same socket: guidance goes to the frame as a buzz
 // ("guide"), camera switches change what's uploaded, "end" ends the call.
 // Nothing is recorded: frames are only held until the next one replaces them.
+//
+// While a helper is watching, the glasses' front LED is on ("live") so
+// people nearby can tell, and the two talk through LiveKit (HelperAudio).
+// Ending the call stops video, audio, the room and the LED together.
 
 import 'dart:async';
 import 'dart:convert';
@@ -20,13 +24,18 @@ import 'package:http/http.dart' as http;
 
 import '../alerts/alert_engine.dart';
 import '../alerts/voice.dart';
+import '../net/cloud.dart';
 import '../net/protocol.dart';
 import '../vision/mjpeg.dart';
 import '../vision/rear_vision.dart';
+import 'helper_audio.dart';
 
-/// Where the helper server is. Override with
-/// `flutter run --dart-define=HELPER_URL=https://<tunnel>`.
-const defaultHelperUrl = String.fromEnvironment('HELPER_URL', defaultValue: 'http://localhost:8020');
+/// Where the helper server is: the cloud server (CLOUD_URL) if the app has one.
+/// Override with `flutter run --dart-define=HELPER_URL=https://<tunnel>`.
+const defaultHelperUrl = String.fromEnvironment(
+  'HELPER_URL',
+  defaultValue: cloudUrl == '' ? 'http://localhost:8020' : cloudUrl,
+);
 
 /// The front ESP32-CAM's stream. With mock_glasses.py, use
 /// `--dart-define=FRONT_CAM_URL=http://localhost:81/stream`.
@@ -41,6 +50,16 @@ enum HelperCamera {
   final String label;
 
   static HelperCamera? fromWire(Object? s) => values.where((c) => c.wire == s).firstOrNull;
+}
+
+enum HelperAudioState {
+  /// No helper yet, or audio is switched off.
+  off,
+  connecting,
+  on,
+
+  /// Couldn't start ([HelperCall.audioNote] says why); video and buzzes go on.
+  unavailable,
 }
 
 enum HelperState {
@@ -142,9 +161,12 @@ class HelperCall extends ChangeNotifier {
     Uri? server,
     http.Client? client,
     Future<HelperSocket> Function(Uri url)? connect,
+    HelperAudio? audio,
+    this.audioEnabled,
     DateTime Function()? clock,
     bool watchLifecycle = true,
   }) : server = server ?? Uri.parse(defaultHelperUrl),
+       audio = audio ?? LiveKitHelperAudio(),
        _http = client ?? http.Client(),
        _connect = connect ?? IoHelperSocket.connect,
        _clock = clock ?? DateTime.now {
@@ -161,6 +183,10 @@ class HelperCall extends ChangeNotifier {
   final http.Client _http;
   final Future<HelperSocket> Function(Uri) _connect;
   final DateTime Function() _clock;
+  final HelperAudio audio;
+
+  /// The "Helper call audio" switch; null means always on.
+  final bool Function()? audioEnabled;
 
   /// Upload at most this often (10 fps).
   static const frameInterval = Duration(milliseconds: 100);
@@ -206,6 +232,19 @@ class HelperCall extends ChangeNotifier {
   bool _cameraOnline = false;
 
   bool get active => _state == HelperState.waiting || _state == HelperState.live;
+
+  HelperAudioState _audioState = HelperAudioState.off;
+  HelperAudioState get audioState => _audioState;
+
+  /// Why audio isn't on, to show.
+  String? _audioNote;
+  String? get audioNote => _audioNote;
+
+  bool _muted = false;
+  bool get muted => _muted;
+
+  int _audioSession = 0;
+  bool _ledOn = false;
 
   /// Opens a room and connects. Returns an error to show, or null; then
   /// share [helperUrl].
@@ -282,13 +321,77 @@ class HelperCall extends ChangeNotifier {
   void _helperJoined() {
     if (_state == HelperState.live) return;
     _set(HelperState.live);
+    _led(true);
     _startUploading();
+    unawaited(_startAudio());
   }
 
   void _helperLeft() {
     if (_state != HelperState.live) return;
     _stopUploading();
+    _stopAudio();
+    _led(false);
     _set(HelperState.waiting);
+  }
+
+  void _led(bool on) {
+    if (on == _ledOn) return;
+    _ledOn = on;
+    toGlasses(LiveCommand(on: on));
+  }
+
+  Future<void> _startAudio() async {
+    final session = ++_audioSession;
+    _muted = false;
+    if (audioEnabled?.call() == false) {
+      _setAudio(HelperAudioState.off, 'Call audio is off in Settings. Video and buzzes still work.');
+      return;
+    }
+    _setAudio(HelperAudioState.connecting);
+    try {
+      final r = await _http
+          .get(server.replace(path: '/livekit-token', queryParameters: {'room': _room, 't': _token}))
+          .timeout(const Duration(seconds: 8));
+      if (session != _audioSession) return;
+      if (r.statusCode == 503) {
+        _setAudio(HelperAudioState.unavailable, "Call audio isn't set up. Video and buzzes still work.");
+        return;
+      }
+      if (r.statusCode != 200) throw HttpException('HTTP ${r.statusCode}');
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      await audio.join(j['url'] as String, j['token'] as String);
+      if (session != _audioSession) {
+        await audio.leave(); // the call moved on while joining
+        return;
+      }
+      _setAudio(HelperAudioState.on);
+    } catch (e) {
+      debugPrint('HelperCall: audio: $e');
+      if (session != _audioSession) return;
+      unawaited(audio.leave());
+      _setAudio(HelperAudioState.unavailable, "Couldn't start call audio. Video and buzzes still work.");
+    }
+  }
+
+  void _stopAudio() {
+    _audioSession++;
+    _muted = false;
+    unawaited(audio.leave());
+    _setAudio(HelperAudioState.off);
+  }
+
+  void _setAudio(HelperAudioState s, [String? note]) {
+    _audioState = s;
+    _audioNote = note;
+    notifyListeners();
+  }
+
+  /// Mutes or unmutes the wearer's microphone.
+  Future<void> setMuted(bool muted) async {
+    if (_audioState != HelperAudioState.on) return;
+    _muted = muted;
+    notifyListeners();
+    await audio.setMuted(muted);
   }
 
   /// The server closed the socket: the call ended (expired, or ended from
@@ -303,7 +406,11 @@ class HelperCall extends ChangeNotifier {
       _finish();
       return;
     }
-    if (_state == HelperState.live) _set(HelperState.waiting);
+    if (_state == HelperState.live) {
+      _stopAudio();
+      _led(false);
+      _set(HelperState.waiting);
+    }
     _scheduleReconnect();
   }
 
@@ -387,6 +494,8 @@ class HelperCall extends ChangeNotifier {
     switch (e) {
       case AlertRaised(:final alert):
         _sendJson({'t': 'alert', 'side': alert.side.wire, 'level': alert.level.wire, 'label': alert.label});
+      case SocialTapped(:final side, :final action, :final lookUp):
+        _sendJson({'t': 'tap', 'side': side.wire, 'kind': lookUp ? 'lookup' : 'social', 'action': ?action});
       case PossiblyFollowing(:final side, :final behindFor, update: false):
         _sendJson({'t': 'alert', 'kind': 'following', 'side': side.wire, 'minutes': behindFor.inMinutes});
       case _:
@@ -405,6 +514,8 @@ class HelperCall extends ChangeNotifier {
 
   void _finish() {
     _stopUploading();
+    _stopAudio();
+    _led(false);
     _reconnect?.cancel();
     _messages?.cancel();
     _messages = null;

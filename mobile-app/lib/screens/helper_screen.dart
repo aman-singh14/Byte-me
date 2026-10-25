@@ -196,6 +196,8 @@ class _LivePanel extends StatelessWidget {
           ),
         ),
         SizedBox(height: space.l),
+        const _AudioRow(),
+        SizedBox(height: space.l),
         Text('Camera they see', style: context.type.label),
         SizedBox(height: space.s),
         SegmentedButton<HelperCamera>(
@@ -227,6 +229,58 @@ class _LivePanel extends StatelessWidget {
         ],
         SizedBox(height: space.xl),
         const _EndButton(),
+      ],
+    );
+  }
+}
+
+/// Call audio: talking, connecting, or why not; and a big Mute button.
+class _AudioRow extends StatelessWidget {
+  const _AudioRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final call = context.watch<HelperCall>();
+    final space = context.space;
+    final on = call.audioState == HelperAudioState.on;
+    final text = switch (call.audioState) {
+      HelperAudioState.on => call.muted ? 'Your microphone is muted.' : 'You and your helper can talk.',
+      HelperAudioState.connecting => 'Connecting audio…',
+      HelperAudioState.off || HelperAudioState.unavailable => call.audioNote ?? 'No call audio.',
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          liveRegion: true,
+          child: Row(
+            children: [
+              ExcludeSemantics(
+                child: Icon(
+                  on && !call.muted ? Symbols.mic_rounded : Symbols.mic_off_rounded,
+                  color: context.colors.textPrimary,
+                ),
+              ),
+              SizedBox(width: space.s),
+              Expanded(child: Text(text, style: context.type.body)),
+            ],
+          ),
+        ),
+        if (on) ...[
+          SizedBox(height: space.s),
+          FilledButton.tonalIcon(
+            style: ButtonStyle(
+              minimumSize: const WidgetStatePropertyAll(Size.fromHeight(56)),
+              textStyle: WidgetStatePropertyAll(context.type.headline),
+            ),
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              call.setMuted(!call.muted);
+            },
+            icon: Icon(call.muted ? Symbols.mic_rounded : Symbols.mic_off_rounded),
+            label: Text(call.muted ? 'Unmute' : 'Mute'),
+          ),
+        ],
       ],
     );
   }

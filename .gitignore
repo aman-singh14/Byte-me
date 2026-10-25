@@ -10,3 +10,6 @@ firmware/esp32cam/secrets.h
 helper-web/node_modules/
 helper-web/coverage/
 backend/tests/data/
+
+# cloud server run locally (DATA_DIR default)
+/data/

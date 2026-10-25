@@ -1,7 +1,7 @@
 // Polls the laptop backend for eye, close-up and ring data.
 //
 // Address: the one typed in Settings, or else the laptop the glasses' UDP hello came
-// from (GlassesLink.frame, the backend plays that device) on port 8000.
+// from (GlassesLink.frame, the backend plays that device) on port 8001.
 
 import 'dart:async';
 
@@ -58,14 +58,14 @@ class MemorySettingsStore implements SettingsStore {
 
 typedef ApiFactory = BackendApi Function(Uri base);
 
-/// Normalises what the user typed: "172.20.10.2" -> http://172.20.10.2:8000.
+/// Normalises what the user typed: "172.20.10.2" -> http://172.20.10.2:8001.
 Uri? parseBackendUrl(String input) {
   var s = input.trim();
   if (s.isEmpty) return null;
   if (!s.contains('://')) s = 'http://$s';
   final u = Uri.tryParse(s);
   if (u == null || u.host.isEmpty || (u.scheme != 'http' && u.scheme != 'https')) return null;
-  return u.hasPort ? u.replace(path: '') : u.replace(port: 8000, path: '');
+  return u.hasPort ? u.replace(path: '') : u.replace(port: 8001, path: '');
 }
 
 class BackendLink extends ChangeNotifier {
@@ -121,7 +121,7 @@ class BackendLink extends ChangeNotifier {
 
   void _onGlasses() {
     final frame = _glasses?.frame;
-    final next = frame == null ? null : Uri(scheme: 'http', host: frame.address.address, port: 8000);
+    final next = frame == null ? null : Uri(scheme: 'http', host: frame.address.address, port: 8001);
     if (next != _auto) {
       _auto = next;
       if (_manual == null) _useBase();
@@ -201,10 +201,22 @@ class BackendLink extends ChangeNotifier {
   }
 
   /// "What am I looking at?" Throws [BackendException] with a readable message.
-  Future<LookResult> look({String? question, String? region}) async {
+  Future<LookResult> look({String? question, String? region, bool requireGaze = false}) async {
     final api = _api;
     if (api == null) throw const BackendException('Set the laptop address in Settings first.');
-    return api.look(question: question, region: region);
+    return api.look(question: question, region: region, requireGaze: requireGaze);
+  }
+
+  /// The shared VLM service on the laptop. Throws [BackendException].
+  Future<Map<String, dynamic>> vlm(
+    String feature, {
+    List<(String, List<int>)> images = const [],
+    bool useFront = false,
+    Duration? timeout,
+  }) async {
+    final api = _api;
+    if (api == null) throw const BackendException('Set the laptop address in Settings first.');
+    return api.vlm(feature, images: images, useFront: useFront, timeout: timeout);
   }
 
   /// Dev mode only. Returns an error message, or null.

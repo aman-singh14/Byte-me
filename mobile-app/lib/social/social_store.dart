@@ -14,14 +14,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../net/cloud.dart';
 import '../net/glasses_link.dart';
 import '../net/protocol.dart';
 import 'rings_source.dart';
 import 'social_api.dart';
 
-/// Where the social server is. Override with
-/// `flutter run --dart-define=SOCIAL_URL=https://...` or in Settings.
-const defaultSocialUrl = String.fromEnvironment('SOCIAL_URL', defaultValue: 'http://localhost:8000');
+/// Where the social server is: the cloud server (CLOUD_URL) if the app has one.
+/// Override with `flutter run --dart-define=SOCIAL_URL=https://...` or in Settings.
+const defaultSocialUrl = String.fromEnvironment(
+  'SOCIAL_URL',
+  defaultValue: cloudUrl == '' ? 'http://localhost:8000' : cloudUrl,
+);
 
 /// Things the UI should say or celebrate.
 sealed class TogetherEvent {

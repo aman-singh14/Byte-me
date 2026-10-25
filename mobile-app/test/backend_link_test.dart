@@ -71,9 +71,9 @@ void main() {
 
   group('addresses', () {
     test('parseBackendUrl', () {
-      expect(parseBackendUrl('172.20.10.2').toString(), 'http://172.20.10.2:8000');
+      expect(parseBackendUrl('172.20.10.2').toString(), 'http://172.20.10.2:8001');
       expect(parseBackendUrl(' 172.20.10.2:8765 ').toString(), 'http://172.20.10.2:8765');
-      expect(parseBackendUrl('http://laptop.local').toString(), 'http://laptop.local:8000');
+      expect(parseBackendUrl('http://laptop.local').toString(), 'http://laptop.local:8001');
       expect(parseBackendUrl(''), isNull);
       expect(parseBackendUrl('ftp://x'), isNull);
     });
@@ -125,7 +125,7 @@ void main() {
       );
       expect(await link.setManualUrl('not a url ::'), isFalse);
       expect(await link.setManualUrl('172.20.10.5'), isTrue);
-      expect(store.url, 'http://172.20.10.5:8000');
+      expect(store.url, 'http://172.20.10.5:8001');
       expect(await link.setManualUrl(''), isTrue);
       expect(store.url, isNull);
       link.dispose();
@@ -196,13 +196,13 @@ void main() {
 
       laptop.send(utf8.encode('{"t":"hello","id":"frame"}'), InternetAddress.loopbackIPv4, glasses.boundPort!);
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      expect(link.discoveredUrl.toString(), 'http://127.0.0.1:8000');
+      expect(link.discoveredUrl.toString(), 'http://127.0.0.1:8001');
       expect(link.baseUrl, link.discoveredUrl);
       await link.refreshLive();
       expect(link.status, BackendStatus.connected);
 
       await link.setManualUrl('172.20.10.7'); // typed address wins
-      expect(link.baseUrl.toString(), 'http://172.20.10.7:8000');
+      expect(link.baseUrl.toString(), 'http://172.20.10.7:8001');
       link.dispose();
       glasses.dispose();
       laptop.close();
