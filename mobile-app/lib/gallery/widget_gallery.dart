@@ -472,6 +472,7 @@ class _CaptionDemoState extends State<_CaptionDemo> {
   @override
   Widget build(BuildContext context) {
     return CaptionView(
+      height: null,
       fontSize: _size,
       onFontSizeChanged: (v) => setState(() => _size = v),
       turns: const [

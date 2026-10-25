@@ -73,6 +73,13 @@ class Api(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
+    def test_voice_question_requires_eye_camera_gaze(self):
+        response = self.client.post('/assist/look', json={
+            'question': 'Read the sign on my left', 'require_gaze': True,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('inward-facing', response.json()['detail'])
+
     def test_eyes_live(self):
         d = self.get("/eyes/live")
         for k in ("blink_rate", "partial_blinks", "squinting", "low_blink", "nearwork", "nearwork_object",

@@ -164,6 +164,19 @@ class PossiblyFollowing extends AlertEvent {
   String toString() => 'PossiblyFollowing(${side.name}, ${behindFor.inSeconds} s${update ? ', update' : ''})';
 }
 
+/// Someone stopped close by on [side], probably to talk (a social tap). Not
+/// a warning: it never uses the urgent color or pattern. [action] is what
+/// Muse saw them doing ("waving"), when it was asked. [lookUp] means the
+/// wearer was doing close-up work, so the tap also says "look up".
+class SocialTapped extends AlertEvent {
+  const SocialTapped(this.side, {this.action, this.lookUp = false});
+  final WearerSide side;
+  final String? action;
+  final bool lookUp;
+  @override
+  String toString() => 'SocialTapped(${side.name}${action == null ? '' : ', $action'}${lookUp ? ', look up' : ''})';
+}
+
 class AlertEngine {
   AlertEngine({this.settings = const AlertSettings()});
 

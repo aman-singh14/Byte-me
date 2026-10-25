@@ -21,6 +21,7 @@ same network can call it. Interactive docs at /docs.
     POST /assist/describe        {"question"?}: same, whole forward view
     GET  /assist/last            the last answer
     GET  /muse/usage             Muse spend, caps, tokens, recent calls
+    POST /vlm/{feature}          {"images": [{"camera", "jpeg"}], "use_front"?}: one structured VLM answer (backend/vlm.py)
     POST /rear/packets           raw rear-protocol packets (HTTP transport for an ESP32 bridge)
     GET  /rear/status            FPGA link: online, packet/CRC stats, last result
     GET  /rear/events            recent rear results (what, dangerous, side, time to contact)
@@ -40,6 +41,8 @@ same network can call it. Interactive docs at /docs.
     GET  /facetime               current OBS scene
     POST /facetime/switch        {"target": "glasses" | "mac" | "toggle"}
     WS   /ws/live                {"type":"live",...} every 0.5 s and {"type":"event",...} as they happen
+    POST /rooms, GET /h/{room}, WS /ws/wearer/{room}, WS /ws/helper/{room}: Call a helper (backend/helper.py)
+    WS   /ws/captions            live captions relay to Muse Voice Transcribe (backend/captions.py)
 """
 
 import asyncio
@@ -52,11 +55,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from backend import screentime
+from backend import captions, helper, screentime
 from backend.db import RANGES
 from backend.facetime import FaceTimeError, FaceTimeSwitch
+from backend.muse_client import MuseUnavailable
 from backend.recommendations import recommend
 from backend.rings import DAY, closeup_summary, day_start
+from backend.vlm import VlmError
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -89,6 +94,17 @@ class OutsideOverride(BaseModel):
 class LookRequest(BaseModel):
     question: str | None = None
     region_override: str | None = None
+    require_gaze: bool = False
+
+
+class VlmImage(BaseModel):
+    camera: str
+    jpeg: str                       # base64
+
+
+class VlmRequest(BaseModel):
+    images: list[VlmImage] = []
+    use_front: bool = False
 
 
 class GazeCalibration(BaseModel):
@@ -105,6 +121,8 @@ def create_app(rt):
     app = FastAPI(title="Glasses backend", version="0.1")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     facetime = FaceTimeSwitch(rt.cfg)
+    app.include_router(helper.router(helper.Rooms()))
+    app.include_router(captions.router())
 
     def check_range(range_name):
         if range_name not in RANGES:
@@ -303,7 +321,7 @@ def create_app(rt):
     def assist_look(body: LookRequest | None = None):
         body = body or LookRequest()
         try:
-            return rt.assistant.look(body.question, body.region_override)
+            return rt.assistant.look(body.question, body.region_override, require_gaze=body.require_gaze)
         except ValueError as e:
             raise HTTPException(400, str(e))
 
@@ -318,6 +336,16 @@ def create_app(rt):
     @app.get("/muse/usage")
     def muse_usage():
         return rt.muse.usage()
+
+    @app.post("/vlm/{feature}")
+    def vlm(feature: str, body: VlmRequest | None = None):
+        body = body or VlmRequest()
+        try:
+            return rt.vlm.run(feature, [(i.camera, i.jpeg) for i in body.images], body.use_front)
+        except VlmError as e:
+            raise HTTPException(400, str(e)) from e
+        except MuseUnavailable as e:
+            raise HTTPException(503, str(e)) from e
 
     @app.post("/rear/packets")
     async def rear_packets(request: Request):

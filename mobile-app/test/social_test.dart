@@ -496,6 +496,16 @@ void main() {
       sensor.close();
     });
 
+    test('looking up when someone stops by adds a minute to Look up', () async {
+      final q = quest('look_up');
+      rings.set(29, 0);
+      expect((quests.progress(q), quests.stars(q)), (29, 0));
+      quests.creditLookUp();
+      expect((quests.progress(q), quests.stars(q)), (30, 1));
+      now = now.add(const Duration(days: 1)); // a new day starts over
+      expect(quests.progress(q), 29);
+    });
+
     test('stars by quest, for the server', () {
       rings.set(65, 0);
       expect(quests.starsByQuest, {'look_up': 2, 'golden_hour': 0, 'phone_down_lunch': 0, 'hang_out': 0});

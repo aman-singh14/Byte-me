@@ -36,6 +36,10 @@ social/.venv/bin/python -m pytest -q social/tests
 
 ## Deploy (Fly.io)
 
+> The usual deploy is now the combined cloud server (`../cloud/README.md`):
+> Together, Call a helper, captions and Muse at one address. The steps below
+> deploy Together on its own.
+
 Fly keeps the SQLite file on a volume, so teams and the public team page are
 still there after the hackathon for judges to revisit. Creating the Fly
 account (it asks for a card even on the free allowance) and logging in is

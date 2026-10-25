@@ -7,5 +7,7 @@ backend/models/
 firmware/*/secrets.h
 *.pyc
 .env
+helper-web/node_modules/
+helper-web/coverage/
 backend/tests/data/
 .DS_Store

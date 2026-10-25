@@ -60,7 +60,7 @@ const sideQuests = [
   SideQuest(
     id: 'look_up',
     title: 'Look up',
-    blurb: 'Heads-up time today: looking farther than a screen.',
+    blurb: 'Heads-up time today: looking farther than a screen. Looking up when someone stops by adds a minute.',
     icon: Symbols.eye_tracking_rounded,
     goals: [30, 60, 120],
     unit: 'min',
@@ -132,6 +132,7 @@ class SideQuestStore extends ChangeNotifier {
   String _day = '';
   Duration _golden = Duration.zero;
   Duration _lunch = Duration.zero;
+  int _lookUps = 0; // looked up after a "look up" tap
   final _earned = <String, int>{}; // stars already announced, by quest
   DateTime? _lastSens;
 
@@ -156,12 +157,23 @@ class SideQuestStore extends ChangeNotifier {
   int progress(SideQuest q) {
     _rollDay();
     return switch (q.id) {
-      'look_up' => rings.today.headsUpMinutes,
+      'look_up' => rings.today.headsUpMinutes + _lookUps * lookUpCreditMinutes,
       'golden_hour' => _golden.inMinutes,
       'phone_down_lunch' => _lunch.inMinutes,
       'hang_out' => together?.minutesToday ?? 0,
       _ => 0,
     };
+  }
+
+  /// Each time the wearer looks up after a "look up" tap, the Look up quest
+  /// gets this many minutes.
+  static const lookUpCreditMinutes = 1;
+
+  /// The wearer looked up from close-up work when someone stopped by.
+  void creditLookUp() {
+    _rollDay();
+    _lookUps++;
+    _changed();
   }
 
   /// Stars earned today. Never goes down during the day, even if a source
@@ -223,6 +235,7 @@ class SideQuestStore extends ChangeNotifier {
     if (day == _day) return;
     _day = day;
     _golden = _lunch = Duration.zero;
+    _lookUps = 0;
     _earned.clear();
     _lastSens = null;
     // Two weeks is plenty for "this week".
@@ -237,6 +250,7 @@ class SideQuestStore extends ChangeNotifier {
     _day = j['day'] as String? ?? '';
     _golden = Duration(seconds: j['golden_s'] as int? ?? 0);
     _lunch = Duration(seconds: j['lunch_s'] as int? ?? 0);
+    _lookUps = j['look_ups'] as int? ?? 0;
     for (final MapEntry(:key, :value) in (j['earned'] as Map? ?? const {}).entries) {
       _earned[key as String] = value as int;
     }
@@ -251,6 +265,7 @@ class SideQuestStore extends ChangeNotifier {
       'day': _day,
       'golden_s': _golden.inSeconds,
       'lunch_s': _lunch.inSeconds,
+      'look_ups': _lookUps,
       'earned': _earned,
       'by_day': _byDay,
     }),

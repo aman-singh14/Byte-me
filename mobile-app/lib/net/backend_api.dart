@@ -96,15 +96,38 @@ class BackendApi {
   /// "What am I looking at?": the backend crops the FRONT camera to [region] (left,
   /// center, right, all; null = where the wearer is looking), runs YOLO for a quick
   /// answer and asks Muse for a fuller one. Takes a few seconds.
-  Future<LookResult> look({String? question, String? region}) async {
+  Future<LookResult> look({String? question, String? region, bool requireGaze = false}) async {
     final j = await transport.request(
       'POST',
       _uri('/assist/look'),
-      body: {'question': question, 'region_override': region},
+      body: {'question': question, 'region_override': region, if (requireGaze) 'require_gaze': true},
       timeout: const Duration(seconds: 45),
     );
     if (j is! Map<String, dynamic>) throw const BackendException('Unexpected answer from the backend.');
     return LookResult.fromJson(j);
+  }
+
+  /// One structured answer from the shared VLM service (backend/vlm.py).
+  /// [images] are (camera, JPEG) pairs; [useFront] adds the laptop's newest
+  /// FRONT frame. Returns the feature's JSON object.
+  Future<Map<String, dynamic>> vlm(
+    String feature, {
+    List<(String, List<int>)> images = const [],
+    bool useFront = false,
+    Duration? timeout,
+  }) async {
+    final j = await transport.request(
+      'POST',
+      _uri('/vlm/$feature'),
+      body: {
+        'images': [for (final (camera, jpeg) in images) {'camera': camera, 'jpeg': base64Encode(jpeg)}],
+        'use_front': useFront,
+      },
+      timeout: timeout,
+    );
+    final result = j is Map<String, dynamic> ? j['result'] : null;
+    if (result is! Map<String, dynamic>) throw const BackendException('Unexpected answer from the backend.');
+    return result;
   }
 
   /// Dev mode only: force "outside" on/off, or null for automatic.

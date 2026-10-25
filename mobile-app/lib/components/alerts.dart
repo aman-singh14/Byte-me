@@ -237,14 +237,16 @@ class _HeadPainter extends CustomPainter {
 
 /// Someone stopped to talk. Teal and friendly, never the urgent color.
 class SocialTapCard extends StatefulWidget {
-  const SocialTapCard({super.key, required this.direction, this.onDismiss, this.announce = true});
+  const SocialTapCard({super.key, required this.direction, this.onDismiss, this.announce = true, this.customSentence});
 
   final Direction direction;
   final VoidCallback? onDismiss;
   final bool announce;
+  /// Replaces the default sentence (a social tap with an action, "look up").
+  final String? customSentence;
 
   /// "Someone stopped behind you, left."
-  String get sentence => 'Someone stopped ${direction.phrase}.';
+  String get sentence => customSentence ?? 'Someone stopped ${direction.phrase}.';
 
   @override
   State<SocialTapCard> createState() => _SocialTapCardState();

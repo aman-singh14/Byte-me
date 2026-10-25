@@ -51,6 +51,16 @@ class AlertService extends ChangeNotifier {
 
   PossiblyFollowing? _following;
 
+  /// The last social tap, until dismissed.
+  SocialTapped? _socialTap;
+  SocialTapped? get socialTap => _socialTap;
+
+  final _tracked = StreamController<DateTime>.broadcast(sync: true);
+
+  /// The time of each rear-camera frame, right after the tracker took it in
+  /// (for the social tap detector, which reads [engine]'s tracks).
+  Stream<DateTime> get tracked => _tracked.stream;
+
   /// The last "possibly following" notice, until dismissed.
   PossiblyFollowing? get following => _following;
 
@@ -101,6 +111,19 @@ class AlertService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Someone stopped close by: tap the glasses on that side, unless a safety
+  /// alert is going on (it always wins).
+  bool raiseSocialTap(SocialTapped tap) {
+    if (current != null) return false;
+    _handle([tap]);
+    return true;
+  }
+
+  void dismissSocialTap() {
+    _socialTap = null;
+    notifyListeners();
+  }
+
   void clearLog() {
     log.clear();
     _save();
@@ -113,8 +136,8 @@ class AlertService extends ChangeNotifier {
     if (identical(loop, _loop)) return;
     _loop = loop;
     _detections?.cancel();
-    _detections = loop?.results.listen(
-      (frame) => _handle(
+    _detections = loop?.results.listen((frame) {
+      _handle(
         engine.addDetections(frame.at, [
           for (final d in frame.detections)
             Sighting(
@@ -123,8 +146,9 @@ class AlertService extends ChangeNotifier {
               box: Box(d.box.left, d.box.top, d.box.right, d.box.bottom),
             ),
         ]),
-      ),
-    );
+      );
+      if (!_disposed) _tracked.add(frame.at);
+    });
   }
 
   /// Acts on engine events. Public for tests.
@@ -150,6 +174,9 @@ class AlertService extends ChangeNotifier {
           } else if (_following?.presence == presence) {
             _following = e;
           }
+        case SocialTapped(:final side, :final lookUp):
+          link.send(TapCommand(side: side, kind: lookUp ? 'lookup' : 'social'));
+          _socialTap = e;
       }
       debugPrint('AlertService: $e');
       log.record(now, e);
@@ -171,6 +198,7 @@ class AlertService extends ChangeNotifier {
     _detections?.cancel();
     vision.removeListener(_onVision);
     _events.close();
+    _tracked.close();
     super.dispose();
   }
 }

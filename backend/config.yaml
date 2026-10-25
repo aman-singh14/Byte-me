@@ -186,7 +186,7 @@ app_bridge:               # speak mobile-app's UDP protocol so Aman's app shows 
 
 api:
   host: 0.0.0.0
-  port: 8001                # 8000 is the Together server (social/)
+  port: 8001              # camera backend; Together uses 8000
 
 db:
   path: backend/data/mega.db

@@ -18,6 +18,7 @@ import base64
 import collections
 import json
 import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -81,6 +82,16 @@ def encode_image(img, max_side=512, quality=70):
     if not ok:
         raise ValueError("JPEG encoding failed")
     return base64.b64encode(buf.tobytes()).decode()
+
+
+def _tls():
+    """python.org's macOS Python has no CA certificates until "Install Certificates" is run;
+    use certifi's when it's installed (it comes with httpx), else the system's."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 class MuseClient:
@@ -162,24 +173,30 @@ class MuseClient:
 
     def _post(self, url, body, headers, timeout):
         req = urllib.request.Request(url, json.dumps(body).encode(), headers)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=_tls()) as r:
             return json.load(r)
 
-    def ask(self, question, image=None, purpose="assist", context=None, system=SYSTEM_PROMPT):
-        """One chat completion. image: BGR array (downscaled + JPEG'd here) or None.
-        Returns MuseResult; raises MuseUnavailable (never spends past the caps)."""
+    def ask(self, question, image=None, purpose="assist", context=None, system=SYSTEM_PROMPT,
+            images=None, schema=None, timeout_s=None, max_tokens=None):
+        """One chat completion. image / images: BGR arrays (downscaled + JPEG'd here).
+        schema: a JSON schema the answer must follow (structured output); the answer is
+        then JSON text. Returns MuseResult; raises MuseUnavailable (never spends past the caps)."""
         self.check_budget()
         text = question if not context else f"{question}\n\n{context}"
         content = [{"type": "text", "text": text}]
-        if image is not None:
-            b64 = encode_image(image, self.image_side, self.image_quality)
+        for img in ([image] if image is not None else []) + list(images or []):
+            b64 = encode_image(img, self.image_side, self.image_quality)
             content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-        body = {"model": self.model, "max_tokens": self.max_tokens, "reasoning_effort": self.reasoning_effort,
+        body = {"model": self.model, "max_tokens": max_tokens or self.max_tokens,
+                "reasoning_effort": self.reasoning_effort,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+        if schema is not None:
+            body["response_format"] = {"type": "json_schema",
+                                       "json_schema": {"name": purpose, "strict": True, "schema": schema}}
         headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
         t0 = time.time()
         try:
-            r = self._transport(f"{self.base_url}/chat/completions", body, headers, self.timeout_s)
+            r = self._transport(f"{self.base_url}/chat/completions", body, headers, timeout_s or self.timeout_s)
         except urllib.error.HTTPError as e:
             detail = e.read()[:200].decode(errors="replace")
             self.db.add_muse_call(t0, purpose, self.model, False, latency_s=time.time() - t0,

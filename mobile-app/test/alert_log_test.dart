@@ -105,4 +105,16 @@ void main() {
     );
     expect(loaded.latest!.behindFor, const Duration(minutes: 4));
   });
+
+  test('social taps are logged as social events, kept through a save', () {
+    final log = AlertLog();
+    log.record(at(0), const SocialTapped(WearerSide.right, action: 'waving'));
+    log.record(at(5), const SocialTapped(WearerSide.behind));
+    final restored = AlertLog()..load(jsonDecode(jsonEncode(log.toJson())), at(10));
+    expect([for (final e in restored.entries) (e.kind, e.side, e.label)], [
+      (LogKind.social, WearerSide.behind, 'person'),
+      (LogKind.social, WearerSide.right, 'waving'),
+    ]);
+    expect(restored.entries.any((e) => e.nearMiss), isFalse); // never counted as a near miss
+  });
 }

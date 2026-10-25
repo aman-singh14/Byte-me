@@ -48,7 +48,13 @@ class Assistant:
         self.still_fn = still_fn          # callable -> a higher-res FRONT still (or None)
         self.last = None
 
-    def pick_region(self, question=None, region_override=None):
+    def pick_region(self, question=None, region_override=None, require_gaze=False):
+        if require_gaze:
+            seen = getattr(self.gaze, "observed_at", None)
+            if (self.gaze is None or self.gaze.calibrating or seen is None
+                    or not 0 <= time.time() - seen <= 1.5 or not self.gaze.smoothed):
+                raise ValueError("I can't determine where you're looking. Make sure the inward-facing eye camera can see your eye, then ask again.")
+            return self.gaze.smoothed, "gaze"
         if region_override:
             if region_override not in ("left", "center", "right", "all"):
                 raise ValueError("region_override must be left, center, right or all")
@@ -64,10 +70,10 @@ class Assistant:
         self.voice.say(text, source="assist")
         self.emit("assist_answer", {"stage": stage, "text": text, **extra})
 
-    def look(self, question=None, region_override=None, use_muse=True):
+    def look(self, question=None, region_override=None, use_muse=True, require_gaze=False):
         t0 = time.time()
         question = (question or "").strip() or DEFAULT_QUESTION
-        region, why = self.pick_region(question, region_override)
+        region, why = self.pick_region(question, region_override, require_gaze)
         result = {"question": question, "region": region, "region_source": why, "detections": [],
                   "local_answer": None, "muse_answer": None, "muse_error": None, "timing_s": {}}
 

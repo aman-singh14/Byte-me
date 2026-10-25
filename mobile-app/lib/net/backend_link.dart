@@ -201,10 +201,22 @@ class BackendLink extends ChangeNotifier {
   }
 
   /// "What am I looking at?" Throws [BackendException] with a readable message.
-  Future<LookResult> look({String? question, String? region}) async {
+  Future<LookResult> look({String? question, String? region, bool requireGaze = false}) async {
     final api = _api;
     if (api == null) throw const BackendException('Set the laptop address in Settings first.');
-    return api.look(question: question, region: region);
+    return api.look(question: question, region: region, requireGaze: requireGaze);
+  }
+
+  /// The shared VLM service on the laptop. Throws [BackendException].
+  Future<Map<String, dynamic>> vlm(
+    String feature, {
+    List<(String, List<int>)> images = const [],
+    bool useFront = false,
+    Duration? timeout,
+  }) async {
+    final api = _api;
+    if (api == null) throw const BackendException('Set the laptop address in Settings first.');
+    return api.vlm(feature, images: images, useFront: useFront, timeout: timeout);
   }
 
   /// Dev mode only. Returns an error message, or null.

@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../alerts/alert_engine.dart';
@@ -41,6 +42,38 @@ class LiveAlertBanner extends StatelessWidget {
         onDismiss: service.dismiss,
         announce: false,
       ),
+    );
+  }
+}
+
+/// What a social tap says: "Someone stopped behind you, left. Waving." or,
+/// during close-up work, "Look up, someone's here. Behind you, left."
+String socialTapSentence(SocialTapped tap) {
+  final where = Direction.fromWearerSide(tap.side).phrase;
+  if (tap.lookUp) return "Look up, someone's here. ${capitalize(where)}.";
+  final action = tap.action?.trim();
+  final doing = action == null || action.isEmpty || !_worthSaying(action) ? '' : ' ${capitalize(action)}.';
+  return 'Someone stopped $where.$doing';
+}
+
+// "standing still" adds nothing to "someone stopped".
+bool _worthSaying(String action) => !RegExp(r'^(standing|stopped|still|standing still|a person)$').hasMatch(action.toLowerCase());
+
+/// The last social tap, until dismissed. Teal and friendly, never urgent.
+class LiveSocialTapCard extends StatelessWidget {
+  const LiveSocialTapCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final service = context.watch<AlertService>();
+    final tap = service.socialTap;
+    if (tap == null) return const SizedBox.shrink();
+    return SocialTapCard(
+      key: ObjectKey(tap), // a new tap fades in again
+      direction: Direction.fromWearerSide(tap.side),
+      customSentence: socialTapSentence(tap),
+      onDismiss: service.dismissSocialTap,
+      announce: false, // AlertAnnouncer says it once for the whole app
     );
   }
 }
@@ -127,6 +160,12 @@ class _AlertAnnouncerState extends State<AlertAnnouncer> {
         } else {
           speak();
         }
+      case SocialTapped():
+        // Gentle, never the alert pattern or its haptic.
+        final sentence = socialTapSentence(e);
+        HapticFeedback.lightImpact();
+        announce(context, sentence);
+        if (!screenReader) _voice?.say(sentence, interrupt: true);
       case PossiblyFollowing(update: true):
         break; // the card's time updates quietly
       case PossiblyFollowing():

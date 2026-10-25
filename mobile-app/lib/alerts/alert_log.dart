@@ -1,11 +1,11 @@
-// The event log: one entry per alert (from first warning to all clear) and
-// per "possibly following" notice. Pure Dart. Kept on the phone only; it
+// The event log: one entry per alert (from first warning to all clear), per
+// "possibly following" notice and per social tap. Pure Dart. Kept on the phone only; it
 // holds what was warned about and when, never video, audio or sensor data.
 
 import '../net/protocol.dart';
 import 'alert_engine.dart';
 
-enum LogKind { alert, following }
+enum LogKind { alert, following, social }
 
 class LogEntry {
   LogEntry({
@@ -24,7 +24,8 @@ class LogEntry {
   final DateTime at;
   WearerSide side;
 
-  /// One word: "car", or "something" if only the reflex saw it.
+  /// One word: "car", or "something" if only the reflex saw it. For a
+  /// social tap, what they were doing ("waving"), or "person".
   String label;
 
   /// Highest level it reached.
@@ -113,6 +114,8 @@ class AlertLog {
         open.ended = reason;
         _open = null;
         _openTrack = null;
+      case SocialTapped(:final side, :final action):
+        _add(LogEntry(kind: LogKind.social, at: at, side: side, label: action ?? 'person'));
       case PossiblyFollowing(:final side, :final behindFor, :final presence, :final update):
         final last = _following;
         if (update && last != null && presence == _followingPresence && _entries.contains(last)) {

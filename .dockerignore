@@ -1,0 +1,19 @@
+# Only what the cloud server (cloud/Dockerfile) needs. Everything else stays out,
+# above all .env (keys go in with "fly secrets set") and the app.
+*
+!cloud/__init__.py
+!cloud/app.py
+!cloud/requirements.txt
+!social/__init__.py
+!social/app.py
+!social/db.py
+!social/page.py
+!backend/__init__.py
+!backend/captions.py
+!backend/config.py
+!backend/config.yaml
+!backend/db.py
+!backend/helper.py
+!backend/muse_client.py
+!backend/vlm.py
+!backend/static/helper.html

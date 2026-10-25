@@ -13,11 +13,14 @@ import '../components/common.dart';
 import '../components/event_log.dart';
 import '../components/rear_view.dart';
 import '../net/protocol.dart';
+import '../settings/feature_flags.dart';
 import '../theme/theme.dart';
 import '../vision/detector.dart';
 import '../vision/mjpeg.dart';
 import '../vision/rear_vision.dart';
 import 'alert_widgets.dart';
+import 'captions_widgets.dart';
+import 'helper_screen.dart';
 import 'home_shell.dart';
 
 class AwareScreen extends StatelessWidget {
@@ -42,7 +45,10 @@ class AwareScreen extends StatelessWidget {
           const RearView(frame: null, detections: [])
         else
           _LiveRearView(camera: camera, loop: vision.loop, detectorState: vision.detectorState),
+        if (alerts.socialTap != null) const LiveSocialTapCard(),
         if (alerts.following != null) const LiveFollowingCard(),
+        if (context.watch<FeatureFlags>()[Feature.captions]) const CaptionsCard(),
+        const HelperCallCard(),
         EventLogCard(entries: alerts.log.entries, onClear: alerts.clearLog),
       ],
     );

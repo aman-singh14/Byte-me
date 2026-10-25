@@ -2,15 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Omni Glasses uses Bluetooth, only if you turn on Together time, to count time spent near your friends.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Omni Glasses talks to your glasses over your phone's hotspot to warn you about things behind you.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -35,6 +26,19 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Omni Glasses uses Bluetooth, only if you turn on Together time, to count time spent near your friends.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Omni Glasses talks to your glasses over your phone's hotspot to warn you about things behind you.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Omni Glasses listens to your spoken questions when you enable voice questions.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Omni Glasses converts your spoken questions into text to answer about what you are looking at.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

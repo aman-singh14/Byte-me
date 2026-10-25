@@ -1,0 +1,115 @@
+{
+  "schema": "omni-looming-tuning/2",
+  "saved": "2026-10-24 19:50:26",
+  "output": "one bit per frame: COLLISION or no collision (no direction)",
+  "target": "big objects (bus, car, bike, person, box/chair) coming toward the camera",
+  "params": {
+    "P_MIN": 20,
+    "W_SHIFT": 3,
+    "S_MIN": 24,
+    "K_MIN": 4800,
+    "F_MAX": 24000,
+    "SMOOTH": 1,
+    "GROW_FRAMES": 4,
+    "GROW_PCT": 15,
+    "EXPAND": 1,
+    "IN_A_ROW": 1,
+    "WINDOW": 2,
+    "WIDTH": 80,
+    "HEIGHT": 60
+  },
+  "decision_pipeline": [
+    "P = |cur - prev| (frame 0: P = 0); P = 0 where P < P_MIN",
+    "I = (sum of the 8 neighbours of the previous frame's P, outside = 0) >> 3",
+    "S = max(P - (I >> W_SHIFT), 0);  K = sum S;  F = sum P   (identical to ../../lgmd.py)",
+    "moving pixel = S > S_MIN;  A = count;  column/row histograms of moving pixels",
+    "box: cut = max(1, A >> 4); x0 = first column where running sum >= cut, x1 = first column where it >= A-cut+1 (rows the same); box only if A >= 8, else none",
+    "E = (x1-x0+1)*(y1-y0+1) (0 if no box);  Es = Es + ((E - Es) >> SMOOTH)  (arithmetic shift, Es starts 0)",
+    "grow = t >= GROW_FR and Es[t-GROW_FR] > 0 and Es[t]*100 > Es[t-GROW_FR]*(100+GROW_PCT)",
+    "expand (if EXPAND) = boxes at t and t-GROW_FR exist, width and height both larger, x0,y0 not > old+1, x1,y1 not < old-1, and |(x0+x1) - (old_x0+old_x1)| * 2 <= width - old_width (grows around its own centre, not sliding in from a side)",
+    "candidate = K > K_MIN and F < F_MAX and grow and expand",
+    "COLLISION = at least IN_A_ROW candidates among the last WINDOW frames (including this one)"
+  ],
+  "frame": {
+    "width": 80,
+    "height": 60,
+    "fps": 15,
+    "grayscale": true,
+    "resize": "cv2.INTER_AREA",
+    "gray": "cv2.COLOR_BGR2GRAY (BT.601 luma)",
+    "crop_to_4_3": true
+  },
+  "register_bits": {
+    "K_and_F": 21,
+    "neighbour_sum": 11,
+    "box_area": 13,
+    "growth_product": 21,
+    "history_frames": 4
+  },
+  "simulation": {
+    "per_kind": 12,
+    "fps": 15,
+    "width": 80,
+    "height": 60,
+    "noise": 2,
+    "shake": 1,
+    "seed": 1
+  },
+  "metrics_training_sims": {
+    "detection_rate": 0.9688,
+    "false_alarm_rate": 0.0312,
+    "median_warning_s": 0.467,
+    "alarm_rate_by_kind": {
+      "approach": 0.969,
+      "sideways": 0.083,
+      "same_size": 0.083,
+      "tiny_growth": 0.0,
+      "moving_away": 0.0,
+      "enters_side": 0.083,
+      "head_turn": 0.0,
+      "lights": 0.0,
+      "nothing": 0.0
+    },
+    "collision_frames_passing": {
+      "motion": 0.187,
+      "not whole view": 0.939,
+      "growing": 0.483,
+      "expanding": 0.237,
+      "candidate": 0.098,
+      "COLLISION": 0.123
+    },
+    "clips": {
+      "collision": 96,
+      "no_collision": 96
+    }
+  },
+  "metrics_validation_sims_other_seed": {
+    "detection_rate": 0.9375,
+    "false_alarm_rate": 0.0625,
+    "median_warning_s": 0.467,
+    "alarm_rate_by_kind": {
+      "approach": 0.938,
+      "sideways": 0.167,
+      "same_size": 0.0,
+      "tiny_growth": 0.0,
+      "moving_away": 0.0,
+      "enters_side": 0.333,
+      "head_turn": 0.0,
+      "lights": 0.0,
+      "nothing": 0.0
+    },
+    "collision_frames_passing": {
+      "motion": 0.202,
+      "not whole view": 0.932,
+      "growing": 0.464,
+      "expanding": 0.237,
+      "candidate": 0.097,
+      "COLLISION": 0.123
+    },
+    "clips": {
+      "collision": 48,
+      "no_collision": 48
+    }
+  },
+  "optimizer": null
+}
