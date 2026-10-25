@@ -3,9 +3,11 @@ MJPEG at http://<board>:81/stream) joined some other Wi-Fi, so the phone on its 
 can't reach them. A laptop on that Wi-Fi reads their streams (tools/cam_relay.py) and
 pushes the frames here; the app pulls them back as MJPEG, the same as from a board.
 
-    WS  /relay/{key}/push/{role}      the laptop: one binary message per JPEG
+    WS  /relay/{key}/push/{role}      the laptop: one binary message per JPEG, and text (JSON) for
+                                      its readings (distance ahead: left_cm, center_cm, right_cm)
     GET /relay/{key}/{role}/stream    the app: MJPEG, newest frame only
     GET /relay/{key}/{role}/capture   the app: the newest frame (Ask)
+    GET /relay/{key}/{role}/sensor    the app: the newest readings
     GET /relay/{key}                  seconds since each camera's last frame
 
 role is "eye" or "front". Every path needs RELAY_KEY (on Fly: fly secrets set RELAY_KEY=...);
@@ -15,10 +17,11 @@ each one replaces the last: nothing is written anywhere.
 
 import asyncio
 import hmac
+import json
 import os
 import time
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket
 from fastapi.responses import Response, StreamingResponse
 
 ROLES = ("eye", "front")
@@ -32,6 +35,7 @@ class Frames:
     def __init__(self, clock=time.monotonic):
         self.clock = clock
         self.latest = {}  # role -> (t, jpeg)
+        self.readings = {}  # role -> (t, dict)
         self._new = {}  # role -> asyncio.Event set by the next frame
 
     def put(self, role, jpeg):
@@ -39,6 +43,13 @@ class Frames:
         event = self._new.pop(role, None)
         if event:
             event.set()
+
+    def put_sensor(self, role, reading):
+        self.readings[role] = (self.clock(), reading)
+
+    def sensor(self, role):
+        t, reading = self.readings.get(role, (None, None))
+        return reading if t is not None and self.clock() - t <= STALE_S else None
 
     def fresh(self, role):
         t, jpeg = self.latest.get(role, (None, None))
@@ -70,13 +81,20 @@ def router(frames, key=None):
             await ws.close(code=1008)
             return
         await ws.accept()
-        try:
-            while True:
-                jpeg = await ws.receive_bytes()
-                if len(jpeg) <= MAX_FRAME and jpeg[:2] == b"\xff\xd8":
-                    frames.put(role, jpeg)
-        except WebSocketDisconnect:
-            pass
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            jpeg, text = msg.get("bytes"), msg.get("text")
+            if jpeg and len(jpeg) <= MAX_FRAME and jpeg[:2] == b"\xff\xd8":
+                frames.put(role, jpeg)
+            elif text and len(text) <= 4096:
+                try:
+                    reading = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(reading, dict):
+                    frames.put_sensor(role, reading)
 
     @r.get("/relay/{k}/{role}/stream")
     async def stream(k: str, role: str):
@@ -100,6 +118,14 @@ def router(frames, key=None):
         if jpeg is None:
             raise HTTPException(503, f"No {role} camera frames are arriving.")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @r.get("/relay/{k}/{role}/sensor")
+    def sensor(k: str, role: str):
+        check(k, role)
+        reading = frames.sensor(role)
+        if reading is None:
+            raise HTTPException(503, f"No {role} camera readings are arriving.")
+        return reading
 
     @r.get("/relay/{k}")
     def status(k: str):

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 
+import '../captions/caption_translator.dart';
 import '../captions/captions.dart';
 import '../components/captions_and_who.dart';
 import '../components/common.dart';
@@ -100,7 +101,13 @@ class _CaptionsCardState extends State<CaptionsCard> {
             CaptionView(
               turns: [
                 for (final l in captions.transcript.lines)
-                  CaptionTurn(id: l.id, speaker: l.speaker, text: l.text, isFinal: l.isFinal),
+                  CaptionTurn(
+                    id: l.id,
+                    speaker: l.speaker,
+                    text: l.text,
+                    isFinal: l.isFinal,
+                    translation: l.translatedTo == captions.translateTo ? l.translation : null,
+                  ),
               ],
               fontSize: captions.fontSize,
               onFontSizeChanged: captions.setFontSize,
@@ -142,7 +149,45 @@ class _CaptionsCardState extends State<CaptionsCard> {
               value: captions.speakerLabels,
               onChanged: captions.setSpeakerLabels,
             ),
+            const _TranslateTile(),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Translate captions into the wearer's language, on the phone.
+class _TranslateTile extends StatelessWidget {
+  const _TranslateTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final captions = context.watch<Captions>();
+    final to = captions.translateTo;
+    return Padding(
+      padding: EdgeInsets.only(top: context.space.s),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<String?>(
+            initialValue: to,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Translate into'),
+            onChanged: captions.setTranslateTo,
+            items: [
+              const DropdownMenuItem(child: Text('Off')),
+              for (final e in translationLanguages.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+            ],
+          ),
+          SizedBox(height: context.space.xs),
+          Text(
+            captions.translateMessage ??
+                (to == null
+                    ? 'Show what people say in your language. Translated on this phone; nothing more is sent.'
+                    : 'Translated on this phone. What was said shows underneath.'),
+            style: context.type.caption.copyWith(color: context.colors.textSecondary),
+          ),
         ],
       ),
     );
@@ -194,7 +239,10 @@ class CaptionsQuickCard extends StatelessWidget {
             const CaptionsPrivacyLine(),
             SizedBox(height: context.space.s),
             Text(
-              last == null ? _stateText(captions) : '${last.speaker == null ? '' : '${last.speaker}: '}${last.text}',
+              last == null
+                  ? _stateText(captions)
+                  : '${last.speaker == null ? '' : '${last.speaker}: '}'
+                        '${last.translatedTo == captions.translateTo ? last.translation ?? last.text : last.text}',
               style: context.type.title,
             ),
           ],

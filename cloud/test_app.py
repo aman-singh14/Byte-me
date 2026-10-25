@@ -88,10 +88,16 @@ class CloudTest(unittest.TestCase):
         c = self.client()
         jpeg = base64.b64decode(jpeg_b64())
         self.assertEqual(c.get("/relay/k3y/eye/capture").status_code, 503)    # nothing pushed yet
+        self.assertEqual(c.get("/relay/k3y/front/sensor").status_code, 503)
         with c.websocket_connect("/relay/k3y/push/eye") as ws:
             ws.send_bytes(b"not a jpeg")
             ws.send_bytes(jpeg)
             c.get("/relay/k3y")                                               # let the push land
+        with c.websocket_connect("/relay/k3y/push/front") as ws:
+            ws.send_text("not json")
+            ws.send_text('{"left_cm": 240, "center_cm": 62, "right_cm": 300}')
+            c.get("/relay/k3y")
+        self.assertEqual(c.get("/relay/k3y/front/sensor").json()["center_cm"], 62)
         self.assertEqual(c.get("/relay/k3y/eye/capture").content, jpeg)
         self.assertEqual(c.get("/relay/k3y").json()["front"], None)
         with c.stream("GET", "/relay/k3y/eye/stream") as r:

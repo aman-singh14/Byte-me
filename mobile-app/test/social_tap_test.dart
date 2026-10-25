@@ -118,6 +118,8 @@ void main() {
     late RearVision vision;
     late AlertService alerts;
     late StreamController<SensMessage> sens;
+    late StreamController<double> turns;
+    String? gaze;
     late FeatureFlags flags;
     late Map<String, dynamic> Function() answer;
     late Completer<void>? hang;
@@ -130,6 +132,8 @@ void main() {
       vision = RearVision(link, _NoDetector());
       alerts = AlertService(link, vision);
       sens = StreamController<SensMessage>.broadcast(sync: true);
+      turns = StreamController<double>.broadcast(sync: true);
+      gaze = null;
       flags = FeatureFlags();
       answer = () => {'engaging': true, 'action': 'waving'};
       hang = null;
@@ -151,6 +155,8 @@ void main() {
         vlm: vlm,
         flags: flags,
         sens: sens.stream,
+        turns: turns.stream,
+        gazeSide: () => gaze,
         onLookedUp: () => lookedUp++,
         clock: () => now,
       );
@@ -162,6 +168,7 @@ void main() {
       vision.dispose();
       link.dispose();
       sens.close();
+      turns.close();
     });
 
     test('Muse says they want attention: tap on that side, card, log, with the action', () async {
@@ -239,6 +246,38 @@ void main() {
         sens.add(const SensMessage(distCm: 200, blink: false, yawRate: 100, lux: 400));
       }
       expect(lookedUp, 0);
+    });
+
+    test("without the frame's gyro: the FPGA's turn, or the eyes moving to that side, counts", () async {
+      for (var s = 0; s <= 11; s++) {
+        now = t0.add(Duration(seconds: s));
+        sens.add(const SensMessage(distCm: 30, blink: false, yawRate: 0, lux: 400)); // the phone's stand-in: no yaw
+      }
+      await taps.confirmAndTap(WearerSide.left);
+      for (var i = 1; i <= 4; i++) {
+        now = now.add(const Duration(milliseconds: 200));
+        turns.add(i == 1 ? 0 : 60); // 0.6 s at 60 deg/s: 36 degrees, a glance is 45
+      }
+      expect(lookedUp, 0);
+      now = now.add(const Duration(milliseconds: 200));
+      turns.add(60);
+      expect(lookedUp, 1);
+
+      now = t0.add(const Duration(minutes: 5));
+      sens.add(const SensMessage(distCm: 30, blink: false, yawRate: 0, lux: 400));
+      for (var s = 0; s <= 11; s++) {
+        now = now.add(const Duration(seconds: 1));
+        sens.add(const SensMessage(distCm: 30, blink: false, yawRate: 0, lux: 400));
+      }
+      await taps.confirmAndTap(WearerSide.right);
+      gaze = 'left';
+      now = now.add(const Duration(milliseconds: 500));
+      sens.add(const SensMessage(distCm: 30, blink: false, yawRate: 0, lux: 400));
+      expect(lookedUp, 1); // looked the wrong way
+      gaze = 'right';
+      now = now.add(const Duration(milliseconds: 500));
+      sens.add(const SensMessage(distCm: 30, blink: false, yawRate: 0, lux: 400));
+      expect(lookedUp, 2);
     });
 
     test('the "look up" nudge can be switched off', () async {

@@ -26,6 +26,10 @@ class CaptionLine {
   /// "Speaker 1", or null without speaker labels.
   String? speaker;
 
+  /// The final text in the wearer's language ([translatedTo]), when it was in another.
+  String? translation;
+  String? translatedTo;
+
   /// The final text arrived with the line still empty: nothing was said.
   bool get isEmpty => text.trim().isEmpty;
 }

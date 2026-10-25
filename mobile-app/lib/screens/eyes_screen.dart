@@ -40,6 +40,7 @@ class EyesScreen extends StatelessWidget {
             ],
           ),
         ),
+        const EyeCameraCard(),
         const BlinkCard(),
         const BlinkTrendCard(),
         const CloseupCard(),

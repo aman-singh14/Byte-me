@@ -6,7 +6,9 @@
 // If Muse doesn't answer in time, or can't be asked, the tap goes out
 // anyway: better to tap than to miss someone. During close-up work the tap
 // is a "look up" tap, and turning toward that side within 10 s counts
-// toward the Look up quest.
+// toward the Look up quest: the frame's gyro (which way), the back camera
+// FPGA's gyro (how fast, not which way: any real turn counts), or the eye
+// camera's gaze moving to that side.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -28,6 +30,8 @@ class SocialTapService {
     required this.vlm,
     required this.flags,
     required Stream<SensMessage> sens,
+    Stream<double>? turns,
+    this.gazeSide,
     this.backendCloseUp,
     this.onLookedUp,
     DateTime Function()? clock,
@@ -36,6 +40,7 @@ class SocialTapService {
        detector = detector ?? SocialTapDetector() {
     _frames = alerts.tracked.listen(_onFrame);
     _sens = sens.listen(_onSens);
+    _turns = turns?.listen(_onTurn);
   }
 
   final AlertService alerts;
@@ -44,6 +49,9 @@ class SocialTapService {
   final Uint8List? Function() rearSnapshot;
   final VlmService vlm;
   final FeatureFlags flags;
+
+  /// Where the eye camera says the wearer looks: "left", "center", "right", or null.
+  final String? Function()? gazeSide;
 
   /// True while the laptop backend has a close-up session open.
   final bool Function()? backendCloseUp;
@@ -62,6 +70,7 @@ class SocialTapService {
 
   late final StreamSubscription<DateTime> _frames;
   late final StreamSubscription<SensMessage> _sens;
+  StreamSubscription<double>? _turns;
   bool _disposed = false;
 
   DateTime? _nearSince;
@@ -69,6 +78,8 @@ class SocialTapService {
   WearerSide? _lookUpSide;
   DateTime? _lookUpUntil;
   double _turnedLeft = 0;
+  double _turnedAny = 0; // the FPGA's gyro: degrees turned, either way
+  DateTime? _lastTurn;
 
   /// Close-up work right now (laptop backend or the frame's distance sensor).
   bool get closeUp {
@@ -107,7 +118,7 @@ class SocialTapService {
     if (tapped && lookUp) {
       _lookUpSide = side;
       _lookUpUntil = _clock().add(lookUpWithin);
-      _turnedLeft = 0;
+      _turnedLeft = _turnedAny = 0;
     }
   }
 
@@ -121,12 +132,9 @@ class SocialTapService {
 
     final last = _lastSens;
     _lastSens = now;
-    final side = _lookUpSide, until = _lookUpUntil;
-    if (side == null || until == null || last == null) return;
-    if (now.isAfter(until)) {
-      _lookUpSide = null;
-      return;
-    }
+    final side = _lookUpPending(now);
+    if (side == null || last == null) return;
+    if (gazeSide?.call() == side.name) return _lookedUp(); // eyes moved to that side
     final dt = math.min(now.difference(last).inMicroseconds / 1e6, 0.2); // cap gaps from dropped samples
     _turnedLeft += s.yawRate * dt;
     final toward = switch (side) {
@@ -134,16 +142,36 @@ class SocialTapService {
       WearerSide.right => -_turnedLeft,
       WearerSide.behind => _turnedLeft.abs(),
     };
-    if (toward >= AlertEngine.glanceDegrees) {
-      _lookUpSide = null;
-      debugPrint('SocialTaps: looked up');
-      onLookedUp?.call();
-    }
+    if (toward >= AlertEngine.glanceDegrees) _lookedUp();
+  }
+
+  /// The back camera FPGA's turn rate (deg/s, which way unknown).
+  void _onTurn(double rate) {
+    final now = _clock();
+    final last = _lastTurn;
+    _lastTurn = now;
+    if (_lookUpPending(now) == null || last == null) return;
+    _turnedAny += rate.abs() * math.min(now.difference(last).inMicroseconds / 1e6, 0.5);
+    if (_turnedAny >= AlertEngine.glanceDegrees) _lookedUp();
+  }
+
+  /// The side of a "look up" tap still waiting for the wearer to turn, if any.
+  WearerSide? _lookUpPending(DateTime now) {
+    final until = _lookUpUntil;
+    if (until != null && now.isAfter(until)) _lookUpSide = null;
+    return _lookUpSide;
+  }
+
+  void _lookedUp() {
+    _lookUpSide = null;
+    debugPrint('SocialTaps: looked up');
+    onLookedUp?.call();
   }
 
   void dispose() {
     _disposed = true;
     _frames.cancel();
     _sens.cancel();
+    _turns?.cancel();
   }
 }

@@ -2,11 +2,15 @@
 // time (FRONT camera). Copy talks about habits linked to eye strain, never a diagnosis.
 
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:provider/provider.dart';
 
 import '../components/common.dart';
+import '../components/live_camera.dart';
+import '../eyes/phone_eyes.dart';
 import '../net/backend_link.dart';
 import '../net/backend_models.dart';
 import '../theme/theme.dart';
@@ -22,6 +26,105 @@ bool _isToday(DateTime t) {
 String clock(DateTime t) {
   final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
   return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour < 12 ? 'am' : 'pm'}';
+}
+
+/// The eye camera's live picture, with a ring where the pupil was found.
+class EyeCameraCard extends StatelessWidget {
+  const EyeCameraCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    PhoneEyes? eyes;
+    try {
+      eyes = context.watch<PhoneEyes>();
+    } on ProviderNotFoundException {
+      eyes = null;
+    }
+    final feed = eyes?.eyeFeed;
+    return OmniCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const CardTitle(icon: Symbols.visibility_rounded, title: 'Eye camera'),
+          SizedBox(height: context.space.s),
+          if (eyes == null || feed == null)
+            Text('No eye camera found.', style: context.type.body)
+          else
+            ListenableBuilder(
+              listenable: Listenable.merge([feed.frame, feed.fps]),
+              builder: (context, _) => _EyeLive(eyes: eyes!, frame: feed.frame.value, fps: feed.fps.value),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EyeLive extends StatelessWidget {
+  const _EyeLive({required this.eyes, required this.frame, required this.fps});
+
+  final PhoneEyes eyes;
+  final Uint8List? frame;
+  final int fps;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final state = eyes.eye.state;
+    final jpeg = frame;
+    final found = state.eyeDetected;
+    final region = eyes.gazeRegion;
+    final status = jpeg == null
+        ? 'Connecting to the eye camera.'
+        : '${found ? 'Eye found' : 'No eye in view'}${region == null ? '' : ' · looking $region'} · $fps fps';
+    return Semantics(
+      label: 'Eye camera. $status',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LiveCameraPicture(
+            frame: jpeg,
+            overlay: state.pupil == null ? null : _PupilPainter(state.pupil!, ring: c.background, edge: c.textPrimary),
+          ),
+          SizedBox(height: context.space.s),
+          ExcludeSemantics(child: Text(status, style: context.type.body)),
+        ],
+      ),
+    );
+  }
+}
+
+/// A ring at the pupil ((x, y) in -1..1 of the picture).
+class _PupilPainter extends CustomPainter {
+  _PupilPainter(this.pupil, {required this.ring, required this.edge});
+
+  final (double, double) pupil;
+  final Color ring, edge;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final at = Offset((pupil.$1 + 1) / 2 * size.width, (pupil.$2 + 1) / 2 * size.height);
+    final r = size.shortestSide * 0.08;
+    canvas.drawCircle(
+      at,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 5
+        ..color = edge,
+    );
+    canvas.drawCircle(
+      at,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..color = ring,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_PupilPainter old) => old.pupil != pupil || old.ring != ring || old.edge != edge;
 }
 
 /// Live blink rate, low-blink note, partial blinks and squints today.

@@ -6,6 +6,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 
 import '../alerts/voice.dart';
+import '../components/common.dart' show capitalize;
 import '../eyes/gaze.dart' show gazePrompt;
 import '../eyes/phone_eyes.dart';
 import '../gallery/widget_gallery.dart';
@@ -47,7 +48,7 @@ class SettingsScreen extends StatelessWidget {
           ListTile(
             leading: const Icon(Symbols.photo_camera_front_rounded),
             title: const Text('Front camera'),
-            subtitle: Text(link.frontCam?.video.toString() ?? 'Not found'),
+            subtitle: Text(link.frontCam == null ? 'Not found' : capitalize(link.frontCam!.where)),
           ),
           const _EyeCameraTile(),
           const _CameraRelayTile(),
@@ -231,11 +232,13 @@ class _EyeCameraTile extends StatelessWidget {
     if (board == null) {
       detail = 'Not found';
     } else if (!onPhone) {
-      detail = '${board.video} · eye tracking runs on the laptop';
+      detail = '${capitalize(board.where)} · eye tracking runs on the laptop';
     } else if (step != null) {
       detail = '${gazePrompt(step)}…';
     } else {
-      detail = '${board.video} · tracked on this phone · gaze ${eyes?.gaze.calibrated == true ? 'calibrated' : 'not calibrated'}';
+      detail =
+          '${capitalize(board.where)} · tracked on this phone · '
+          'gaze ${eyes?.gaze.calibrated == true ? 'calibrated' : 'not calibrated'}';
     }
     return ListTile(
       leading: const Icon(Symbols.visibility_rounded),

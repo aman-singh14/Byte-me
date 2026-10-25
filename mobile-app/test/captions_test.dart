@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omni_glasses/captions/caption_transcript.dart';
+import 'package:omni_glasses/captions/caption_translator.dart';
 import 'package:omni_glasses/captions/captions.dart';
 import 'package:omni_glasses/components/captions_and_who.dart';
 import 'package:omni_glasses/helper/helper_call.dart' show HelperSocket;
@@ -70,9 +71,28 @@ class FakeCaptionMic implements CaptionMic {
 }
 
 /// Captions wired to fakes, for screen tests.
-Captions fakeCaptions({List<FakeCaptionSocket>? sockets, FakeCaptionMic? mic, Uri? relay}) => Captions(
+/// Spanish to English from a phrasebook; anything else isn't downloaded.
+class FakeTranslator implements CaptionTranslator {
+  final asked = <String>[];
+
+  @override
+  Future<(String, String)> translate(String text, String target) async {
+    asked.add(text);
+    const phrasebook = {'¿Dónde está la estación?': 'Where is the station?'};
+    if (text == 'Bonjour à tous.') throw const TranslationUnavailable('not_installed', 'fr');
+    return (phrasebook[text] ?? text, phrasebook.containsKey(text) ? 'es' : target);
+  }
+}
+
+Captions fakeCaptions({
+  List<FakeCaptionSocket>? sockets,
+  FakeCaptionMic? mic,
+  Uri? relay,
+  CaptionTranslator? translator,
+}) => Captions(
   relay: () => relay ?? Uri.parse('ws://laptop.test:8001/ws/captions'),
   mic: mic ?? FakeCaptionMic(),
+  translator: translator ?? FakeTranslator(),
   connect: (url) async {
     final s = FakeCaptionSocket();
     sockets?.add(s);
@@ -185,6 +205,31 @@ void main() {
       expect((line.text, line.isFinal, line.speaker), ('Hello there.', true, 'Speaker 1'));
     });
 
+    test('finished lines are translated into the chosen language; partials and own-language lines are not', () async {
+      final translator = captions.translator as FakeTranslator;
+      final s = await goLive();
+      captions.setTranslateTo('en');
+      s.server({'type': 'speechStart', 'turnId': 1});
+      s.server({'type': 'transcript', 'transcript': '¿Dónde está', 'final': false});
+      await pumpEventQueue();
+      expect(translator.asked, isEmpty); // still being said
+      s.server({'type': 'speechComplete', 'turnId': 1, 'transcript': '¿Dónde está la estación?'});
+      s.server({'type': 'speechStart', 'turnId': 2});
+      s.server({'type': 'speechComplete', 'turnId': 2, 'transcript': 'Over there.'});
+      await pumpEventQueue();
+      final lines = captions.transcript.lines;
+      expect((lines[0].translation, lines[0].translatedTo), ('Where is the station?', 'en'));
+      expect((lines[1].translation, lines[1].translatedTo), (null, 'en')); // already English
+      expect(translator.asked, ['¿Dónde está la estación?', 'Over there.']);
+
+      s.server({'type': 'speechStart', 'turnId': 3});
+      s.server({'type': 'speechComplete', 'turnId': 3, 'transcript': 'Bonjour à tous.'});
+      await pumpEventQueue();
+      expect(captions.translateMessage, contains("aren't downloaded"));
+      captions.setTranslateTo(null);
+      expect(captions.translateMessage, isNull);
+    });
+
     test('without speaker labels it asks for the faster ENDPOINTING mode', () async {
       captions.setSpeakerLabels(false);
       final s = await goLive();
@@ -270,6 +315,44 @@ void main() {
       final partial = tester.widget<Text>(find.text('yes after my'));
       expect(partial.style?.fontStyle, FontStyle.italic);
       expect(tester.widget<Text>(find.text('Are you coming?')).style?.fontStyle, isNot(FontStyle.italic));
+    });
+
+    testWidgets('a translated line shows big, with what was said small underneath', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: omniLightTheme,
+          home: Scaffold(
+            body: CaptionView(
+              fontSize: 28,
+              onFontSizeChanged: (_) {},
+              turns: const [
+                CaptionTurn(id: 1, text: '¿Dónde está la estación?', translation: 'Where is the station?'),
+              ],
+            ),
+          ),
+        ),
+      );
+      final big = tester.widget<Text>(find.text('Where is the station?'));
+      final small = tester.widget<Text>(find.text('¿Dónde está la estación?'));
+      expect(small.style!.fontSize!, lessThan(big.style!.fontSize!));
+      expect(find.bySemanticsLabel(RegExp('Where is the station\\?. Said: ¿Dónde está')), findsOneWidget);
+    });
+
+    testWidgets('the translate choice lays out on a small phone at 200% text', (tester) async {
+      tester.view.physicalSize = const Size(360 * 3, 740 * 3);
+      tester.view.devicePixelRatio = 3;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearAllTestValues);
+      final captions = await pump(tester, const CaptionsCard());
+      captions.acceptConsent();
+      await tester.runAsync(captions.turnOn);
+      captions.setTranslateTo('zh-Hans');
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.text('Translate into'), 300, scrollable: find.byType(Scrollable).first);
+      expect(find.text('Chinese (Simplified)'), findsOneWidget);
+      expect(find.textContaining('Translated on this phone'), findsOneWidget);
+      await tester.runAsync(captions.turnOff);
     });
 
     testWidgets('the first time, captions explain themselves and wait for a yes', (tester) async {

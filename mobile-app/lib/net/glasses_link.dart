@@ -80,6 +80,12 @@ class CameraBoard {
   /// The front board's exposure and gain (for outside time); a relay has none.
   Uri? get sensor => relay != null ? null : Uri.parse('http://${address!.address}:${hello.httpPort}/sensor');
 
+  /// The relay laptop's distance ahead (tools/cam_relay.py --front-depth): left_cm, center_cm, right_cm.
+  Uri? get distance => relay != null ? _relayed('sensor') : null;
+
+  /// Where it is, for Settings: its video address, or the relay it comes through.
+  String get where => relay != null ? 'through the camera relay at ${relay!.authority}' : video.toString();
+
   /// A live feed of its video.
   CameraFeed open() => hello.udp && address != null ? UdpCamera(address!, hello.streamPort) : RearCamera(video);
 

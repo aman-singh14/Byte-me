@@ -8,7 +8,10 @@ import 'package:provider/provider.dart';
 
 import '../components/common.dart';
 import '../components/status_strip.dart';
+import '../eyes/phone_eyes.dart';
 import '../net/glasses_link.dart';
+import '../theme/theme.dart';
+import 'front_camera_card.dart';
 
 /// StatusStrip fed by the live link. Ticks once a second while the link is
 /// lost so "Link lost 12 s ago" stays current.
@@ -42,13 +45,35 @@ class _LiveStatusStripState extends State<LiveStatusStrip> {
       _tick = null;
     }
     if (widget.bannerOnly && link.status == LinkStatus.connected) return const SizedBox.shrink();
+    final connected = link.status == LinkStatus.connected;
+    // Today: what the front camera sees, while it streams. With the back camera away it takes
+    // the banner's place (and says rear alerts are off); other tabs keep the banner.
+    final front = !widget.bannerOnly && _frontOnline(context);
+    if (front && !connected) return const FrontCameraCard(rearConnected: false);
 
     final last = link.lastHeardAt;
-    return StatusStrip(
+    final strip = StatusStrip(
       status: link.status,
       batteryPercent: link.batteryPercent,
       lostFor: lost && last != null ? DateTime.now().difference(last) : null,
     );
+    if (!front) return strip;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        strip,
+        SizedBox(height: context.space.cardGap),
+        const FrontCameraCard(rearConnected: true),
+      ],
+    );
+  }
+}
+
+bool _frontOnline(BuildContext context) {
+  try {
+    return context.watch<PhoneEyes>().frontOnline;
+  } on ProviderNotFoundException {
+    return false;
   }
 }
 

@@ -6,7 +6,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../theme/theme.dart';
 
 class CaptionTurn {
-  const CaptionTurn({this.id, this.speaker, required this.text, this.isFinal = true});
+  const CaptionTurn({this.id, this.speaker, required this.text, this.isFinal = true, this.translation});
 
   /// Stable per line, so a partial and its final text are the same widget.
   final int? id;
@@ -17,6 +17,9 @@ class CaptionTurn {
 
   /// Partial text is shown lighter and in italics until the final text replaces it.
   final bool isFinal;
+
+  /// [text] in the wearer's language: shown big, with what was said small underneath.
+  final String? translation;
 }
 
 /// Live captions: large high-contrast text with clear speaker turns and a
@@ -181,7 +184,9 @@ class _Turn extends StatelessWidget {
   Widget build(BuildContext context) {
     final space = context.space;
     return Semantics(
-      label: '${turn.speaker == null ? '' : '${turn.speaker}: '}${turn.text}${turn.isFinal ? '' : ' (still listening)'}',
+      label:
+          '${turn.speaker == null ? '' : '${turn.speaker}: '}${turn.translation ?? turn.text}'
+          '${turn.translation == null ? '' : '. Said: ${turn.text}'}${turn.isFinal ? '' : ' (still listening)'}',
       child: ExcludeSemantics(
         child: Container(
           margin: EdgeInsets.only(top: divider ? space.m : 0),
@@ -193,7 +198,12 @@ class _Turn extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (showSpeaker) Text(turn.speaker!, style: context.type.label.copyWith(color: fg)),
-              Text(turn.text, style: style),
+              Text(turn.translation ?? turn.text, style: style),
+              if (turn.translation != null)
+                Text(
+                  turn.text,
+                  style: style.copyWith(fontSize: (style.fontSize ?? 28) * 0.6, color: fg.withValues(alpha: 0.75)),
+                ),
             ],
           ),
         ),

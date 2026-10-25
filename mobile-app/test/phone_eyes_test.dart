@@ -174,6 +174,18 @@ void main() {
       expect(c.open, (51, 'laptop'));
     });
 
+    test('only near-work within reach, where the wearer looks, stops heads-up time', () {
+      const laptopRight = NearObject('laptop', 60, 0.4, Rect.fromLTRB(0.6, 0.3, 0.95, 0.8));
+      const tvFar = NearObject('tv', 300, 0.3, Rect.fromLTRB(0.3, 0.1, 0.7, 0.5));
+      const phoneLeft = NearObject('cell phone', 30, 0.3, Rect.fromLTRB(0.05, 0.5, 0.3, 0.9));
+      final all = [phoneLeft, laptopRight, tvFar];
+      expect(lookedAt(all, null), [phoneLeft, laptopRight]); // no gaze: anything within reach
+      expect(lookedAt(all, regionColumns['right']), [laptopRight]);
+      expect(lookedAt(all, regionColumns['left']), [phoneLeft]);
+      expect(lookedAt(all, regionColumns['center']), [phoneLeft, laptopRight]); // both reach into the middle
+      expect(lookedAt([phoneLeft, tvFar], regionColumns['right']), isEmpty); // looking away: heads-up
+    });
+
     test('heads-up counts from the last near-work once it lasts 20 s, while worn', () {
       final h = HeadsUpTracker();
       h.update(0, true, true);
@@ -193,6 +205,21 @@ void main() {
       expect(o.update(61, luma: 120, exposureLines: 20, gain: 1), ('start', 1.0));
       expect(o.update(70, luma: 120, exposureLines: 1000, gain: 4), isNull);
       expect(o.update(131, luma: 120, exposureLines: 1000, gain: 4), ('end', (1.0, 70.0)));
+    });
+
+    test('a camera without exposure numbers goes by the sky, in daylight', () {
+      final o = OutdoorDetector();
+      expect(o.update(0, luma: 120, sky: 0.6, cameraOnly: true), isNull);
+      expect(o.update(30, luma: 120, sky: 0.0, cameraOnly: true), isNull); // a glance at a window
+      expect(o.update(31, luma: 120, sky: 0.5, cameraOnly: true), isNull);
+      expect(o.update(91, luma: 120, sky: 0.5, cameraOnly: true), ('start', 31.0));
+      expect(o.update(100, luma: 120, sky: 0.15, cameraOnly: true), isNull); // looking down a little: still out
+      expect(o.update(200, luma: 120, sky: 0.0, cameraOnly: true), isNull);
+      expect(o.update(260, luma: 120, sky: 0.0, cameraOnly: true), ('end', (31.0, 200.0)));
+      expect(o.update(300, luma: 20, sky: 0.6, cameraOnly: true), isNull); // night sky: not outside time
+      expect(o.update(400, luma: 20, sky: 0.6, cameraOnly: true), isNull);
+      expect(o.update(500, luma: 120, sky: 0.6), isNull); // a board's camera without fresh numbers: no call
+      expect(o.update(600, luma: 120, sky: 0.6), isNull);
     });
 
     test("reads the board's /sensor, including the raw gain register", () {
@@ -352,6 +379,56 @@ void main() {
       expect(eyes.live().eyeCameraOnline, isTrue);
       link.relay = null;
       await server.close(force: true);
+    });
+
+    test('a webcam through the relay fills the outside ring and reads as daylight to the quests', () async {
+      final sens = <SensMessage>[];
+      link.sens.listen(sens.add);
+      link.relay = parseRelay('http://127.0.0.1:9/relay/k'); // nothing there: the eye camera never sends
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(link.frontCam?.sensor, isNull);
+      expect(eyes.worn, isTrue); // an eye camera that sends nothing can't say the glasses are off
+      final t0 = DateTime.now().millisecondsSinceEpoch / 1000;
+      for (var t = t0; t < t0 + 70; t += 0.33) {
+        eyes.frontResults(frozen = t, const [], (120.0, 0.6)); // sky in the top third
+      }
+      expect(eyes.outdoor.outside, isTrue);
+      expect(eyes.live().headsUpSince, isNotNull);
+      expect(eyes.ringsToday().outside.active, isTrue);
+      frozen = null;
+      eyes.frontResults(DateTime.now().millisecondsSinceEpoch / 1000, const [], (120.0, 0.6));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      expect(sens.last.lux, outsideLux);
+      link.relay = null;
+    });
+
+    test("the relay laptop's depth model gives the live distance ahead", () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var center = 62;
+      server.listen((req) async {
+        if (req.uri.path == '/relay/k/front/sensor') {
+          req.response.headers.contentType = ContentType.json;
+          req.response.write('{"left_cm": 240, "center_cm": $center, "right_cm": 300}');
+        } else {
+          req.response.statusCode = 404;
+        }
+        await req.response.close();
+      });
+      final sens = <SensMessage>[];
+      link.sens.listen(sens.add);
+      link.relay = parseRelay('http://127.0.0.1:${server.port}/relay/k');
+      Future<void> frontAndWait() async {
+        eyes.frontResults(DateTime.now().millisecondsSinceEpoch / 1000, [det('laptop', 0.5, 0.3)], (100.0, 0.0));
+        await Future<void>.delayed(const Duration(milliseconds: 1100));
+      }
+
+      await frontAndWait();
+      expect(sens.last.distCm, 62); // what's ahead (no gaze yet: the middle), not the laptop's size estimate
+      center = 140;
+      await frontAndWait();
+      expect(sens.last.distCm, 140);
+      await server.close(force: true);
+      link.relay = null;
     });
 
     test('front camera near-work becomes a close-up session, heads-up and the frame sensor stand-in', () async {

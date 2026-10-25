@@ -13,7 +13,9 @@ can't reach. Run this on a laptop on the cameras' Wi-Fi:
     # the laptop serves the same paths itself, for a phone that can reach it (Tailscale, or the
     # same Wi-Fi): http://<laptop>:8030/relay/k
 
---eye / --front take a board's IP (its stream is then http://IP:81/stream) or a whole stream URL.
+--eye / --front take a board's IP or a whole stream URL. With an IP the relay finds the video itself:
+MJPEG at :81/stream (team firmware, stock CameraWebServer), /stream, /mjpeg/1, /video or /, the
+team firmware's UDP video on 81 (WANT / CAMV), or else stills from /capture, /jpg or /cam-lo.jpg.
 Frames go on as they come (no re-encoding), newest only, at most --eye-fps / --front-fps a second;
 nothing is saved. Every 5 s it prints what each camera is sending.
 
@@ -22,10 +24,16 @@ camera instead of a board, cropped to 4:3 like the boards (the app's distances a
 
     .venv/bin/python tools/cam_relay.py --front webcam --front-fps 15 --serve 8030 --key k
     # laptop on the phone's hotspot: http://172.20.10.x:8030/relay/k in the app
+
+--front-depth runs a depth model on this laptop (Depth Anything V2, metric indoor; needs
+`pip install transformers`, ~100 MB downloaded the first time) on the front frames, and sends the
+distance to what is ahead in the left, center and right of the picture a few times a second. The
+app shows it live and uses the side the wearer looks at.
 """
 
 import argparse
 import asyncio
+import json
 import sys
 import threading
 import time
@@ -39,12 +47,95 @@ MAX_FRAME = 512 * 1024
 
 
 def stream_url(s):
-    return s if "://" in s or s.startswith("webcam") else f"http://{s}:81/stream"
+    return s if "://" in s or s.startswith("webcam") else f"board://{s}"
+
+
+MJPEG_PATHS = ("/stream", "/mjpeg/1", "/mjpeg", "/video", "/")
+STILL_PATHS = ("/capture", "/jpg", "/cam-lo.jpg", "/cam.jpg")
+
+
+def board_jpegs(ip, say, video_port=81, http_port=80):
+    """A camera board's video, wherever its firmware puts it (see the module docstring)."""
+    for port, path in [(video_port, "/stream"), *((http_port, p) for p in MJPEG_PATHS)]:
+        url = f"http://{ip}:{port}{path}"
+        try:
+            r = urllib.request.urlopen(url, timeout=3)
+        except Exception:
+            continue
+        kind = r.headers.get_content_type()
+        if kind.startswith("multipart/"):
+            say(f"video at {url}")
+            yield from mjpeg_jpegs(r)
+            return
+        r.close()
+    if (udp := udp_jpegs(ip, video_port)) is not None:
+        say(f"video over UDP at {ip}:{video_port}")
+        yield from udp
+        return
+    for path in STILL_PATHS:
+        url = f"http://{ip}:{http_port}{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
+                first = r.read()
+        except Exception:
+            continue
+        if first[:2] == b"\xff\xd8":
+            say(f"stills from {url} (no video stream found)")
+            yield first
+            while True:
+                with urllib.request.urlopen(url, timeout=3) as r:
+                    yield r.read()
+    raise OSError(f"no video found on {ip} (tried MJPEG on :{video_port}/stream and :{http_port}"
+                  f"{', '.join(MJPEG_PATHS)}, UDP {video_port}, and stills)")
+
+
+def udp_jpegs(ip, port=81):
+    """The team firmware's UDP video: send WANT, get CAMV chunks. None if nothing answers in 2 s."""
+    import socket
+    import struct
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(2)
+    try:
+        sock.sendto(b"WANT", (ip, port))
+        first, _ = sock.recvfrom(2048)
+    except OSError:
+        sock.close()
+        return None
+
+    def frames(data):
+        parts, last_want = {}, time.monotonic()
+        while True:
+            if time.monotonic() - last_want > 1:
+                sock.sendto(b"WANT", (ip, port))
+                last_want = time.monotonic()
+            if len(data) > 16 and data[:4] in (b"CAMV", b"OMNV"):
+                fid, chunk, n, total = struct.unpack_from("<IHHI", data, 4)
+                entry = parts.setdefault(fid, {})
+                entry[chunk] = data[16:]
+                if len(entry) == n:
+                    jpeg = b"".join(entry[i] for i in range(n))
+                    for old in [k for k in parts if k <= fid]:
+                        del parts[old]
+                    if len(jpeg) == total:
+                        yield jpeg
+                if len(parts) > 8:
+                    for old in sorted(parts)[:-4]:
+                        del parts[old]
+            data, _ = sock.recvfrom(2048)
+
+    return frames(first)
 
 
 def jpegs(url):
-    """The JPEGs of an MJPEG stream: FF D8 .. FF D9, whatever the boundary."""
+    """The JPEGs of an MJPEG stream at [url]."""
     with urllib.request.urlopen(url, timeout=5) as r:
+        yield from mjpeg_jpegs(r)
+
+
+def mjpeg_jpegs(r):
+    """The JPEGs of an open MJPEG response: FF D8 .. FF D9, whatever the boundary."""
+    with r:
         buf = b""
         while chunk := r.read1(16384):
             buf += chunk
@@ -102,6 +193,7 @@ class Camera:
         self.role, self.url = role, url
         self.webcam = (webcam_height, webcam_quality)
         self.frame, self.seq = None, 0
+        self.sensor, self.sensor_seq = None, 0  # --front-depth: {"left_cm":..,"center_cm":..,"right_cm":..}
         self.got = self.sent = self.sent_bytes = 0
         self.changed = threading.Condition()
         threading.Thread(target=self._read, daemon=True).start()
@@ -112,6 +204,8 @@ class Camera:
             try:
                 if self.url.startswith("webcam"):
                     source = webcam_jpegs(int(self.url.partition(":")[2] or 0), *self.webcam)
+                elif self.url.startswith("board://"):
+                    source = board_jpegs(self.url[len("board://"):], lambda m: print(f"{self.role}: {m}", flush=True))
                 else:
                     source = jpegs(self.url)
                 for jpeg in source:
@@ -129,7 +223,7 @@ class Camera:
                     said = str(e)
                 time.sleep(1)
 
-    def frames(self, fps):
+    def frames(self, fps, count=True):
         """The newest frame each time there's a new one, at most [fps] a second."""
         seq, last = 0, 0.0
         while True:
@@ -138,9 +232,41 @@ class Camera:
                 self.changed.wait_for(lambda: self.seq != seq)
                 seq, jpeg = self.seq, self.frame
             last = time.monotonic()
-            self.sent += 1
-            self.sent_bytes += len(jpeg)
+            if count:
+                self.sent += 1
+                self.sent_bytes += len(jpeg)
             yield jpeg
+
+
+DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
+COLUMNS = {"left": (0.0, 0.41), "center": (0.26, 0.74), "right": (0.59, 1.0)}  # the app's gaze columns
+
+
+def depth(cam, fps):
+    """Distance to what is ahead in [cam]'s picture, from a depth model: the nearer part (30th
+    percentile) of the middle half of each gaze column, in cm, into cam.sensor."""
+    import cv2
+    import numpy as np
+    import torch
+    from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+
+    device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+    proc = AutoImageProcessor.from_pretrained(DEPTH_MODEL)
+    model = AutoModelForDepthEstimation.from_pretrained(DEPTH_MODEL).to(device).eval()
+    print(f"{cam.role}: depth model ready ({device})", flush=True)
+    for jpeg in cam.frames(fps, count=False):
+        img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+        with torch.no_grad():
+            d = model(**proc(images=cv2.cvtColor(img, cv2.COLOR_BGR2RGB), return_tensors="pt").to(device))
+            m = d.predicted_depth[0].cpu().numpy()  # metres, at the model's size
+        h, w = m.shape
+        rows = m[h // 4:h * 3 // 4]
+        reading = {f"{name}_cm": int(np.percentile(rows[:, int(a * w):max(int(b * w), int(a * w) + 1)], 30) * 100)
+                   for name, (a, b) in COLUMNS.items()}
+        with cam.changed:
+            cam.sensor, cam.sensor_seq = reading, cam.sensor_seq + 1
 
 
 def push(cam, fps, base, key):
@@ -154,9 +280,12 @@ def push(cam, fps, base, key):
         try:
             with connect(url, open_timeout=10, max_size=None) as ws:
                 print(f"{cam.role}: pushing to {base}", flush=True)
-                said = None
+                said, sensor_seq = None, 0
                 for jpeg in cam.frames(fps):
                     ws.send(jpeg)
+                    if cam.sensor_seq != sensor_seq:  # the newest distances ride along as text
+                        sensor_seq = cam.sensor_seq
+                        ws.send(json.dumps(cam.sensor))
         except Exception as e:
             if said != str(e):
                 print(f"{cam.role}: {base}: {e}; retrying", flush=True)
@@ -168,7 +297,8 @@ def report(cams):
     while True:
         time.sleep(5)
         print("  ".join(f"{c.role} {c.sent / 5:.0f} fps {c.sent_bytes / 5 / 1024:.0f} KB/s"
-                        f" (camera {c.got / 5:.0f} fps)" for c in cams), flush=True)
+                        f" (camera {c.got / 5:.0f} fps)" + (f" {c.sensor}" if c.sensor else "") for c in cams),
+              flush=True)
         for c in cams:
             c.got = c.sent = c.sent_bytes = 0
 
@@ -183,6 +313,19 @@ def set_framesize(url, val):
         print(f"front: couldn't set the framesize: {e}", flush=True)
 
 
+def local_addresses():
+    """This laptop's IPv4 addresses, from ifconfig (macOS), the hotspot's first."""
+    import re
+    import subprocess
+
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ["<this laptop>"]
+    found = [a for a in re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", out) if not a.startswith(("127.", "169.254."))]
+    return sorted(found, key=lambda a: not a.startswith("172.20.10.")) or ["<this laptop>"]
+
+
 async def serve(cams, rates, port, key):
     import uvicorn
     from fastapi import FastAPI
@@ -193,12 +336,18 @@ async def serve(cams, rates, port, key):
     loop = asyncio.get_running_loop()
     for cam in cams:
         def forward(cam=cam):
+            sensor_seq = 0
             for jpeg in cam.frames(rates[cam.role]):
                 loop.call_soon_threadsafe(frames.put, cam.role, jpeg)
+                if cam.sensor_seq != sensor_seq:
+                    sensor_seq = cam.sensor_seq
+                    loop.call_soon_threadsafe(frames.put_sensor, cam.role, cam.sensor)
         threading.Thread(target=forward, daemon=True).start()
     app = FastAPI()
     app.include_router(relay.router(frames, key))
-    print(f"serving http://<this laptop>:{port}/relay/{key}", flush=True)
+    for addr in local_addresses():
+        where = " (the phone's hotspot or its USB cable: type this one in the app)" if addr.startswith("172.20.10.") else ""
+        print(f"serving http://{addr}:{port}/relay/{key}{where}", flush=True)
     await uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")).serve()
 
 
@@ -218,6 +367,9 @@ def main():
     ap.add_argument("--webcam-height", type=int, default=720,
                     help="webcam picture height (4:3: 720 = 960x720; 480 for less data over cellular)")
     ap.add_argument("--webcam-quality", type=int, default=80, help="webcam JPEG quality, 1..100")
+    ap.add_argument("--front-depth", action="store_true",
+                    help="measure the distance ahead with a depth model on this laptop (live distance in the app)")
+    ap.add_argument("--depth-fps", type=float, default=5)
     a = ap.parse_args()
     if not (a.eye or a.front):
         ap.error("give --eye and/or --front")
@@ -229,6 +381,11 @@ def main():
     cams = [Camera(role, stream_url(src), a.webcam_height, a.webcam_quality)
             for role, src in (("eye", a.eye), ("front", a.front)) if src]
     rates = {"eye": a.eye_fps, "front": a.front_fps}
+    if a.front_depth:
+        front = next((c for c in cams if c.role == "front"), None)
+        if front is None:
+            ap.error("--front-depth needs --front")
+        threading.Thread(target=depth, args=(front, a.depth_fps), daemon=True).start()
     threading.Thread(target=report, args=(cams,), daemon=True).start()
     if a.serve:
         asyncio.run(serve(cams, rates, a.serve, a.key))

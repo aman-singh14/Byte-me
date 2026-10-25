@@ -109,6 +109,9 @@ class EyeWorker {
 /// The distance reported with nothing near in view: well past heads-up distance (100 cm).
 const farCm = 300;
 
+/// The light reported while outside, for the quests and stand-in rings (above outsideMinLux).
+const outsideLux = 10000;
+
 double _nowSeconds() => DateTime.now().millisecondsSinceEpoch / 1000;
 
 class PhoneEyes extends ChangeNotifier {
@@ -155,9 +158,18 @@ class PhoneEyes extends ChangeNotifier {
   bool _detectorReady = false;
   (double, double)? _sensorReading;
   double? _sensorAt;
+  Map<String, double> _ahead = const {}; // gaze column -> cm, from the relay's depth model
+  double? _aheadAt;
+  bool _aheadBusy = false;
   double? _luma;
   bool _blinkSinceSens = false;
   bool _disposed = false;
+
+  /// The eye camera's live video, for the Eyes tab (null without an eye camera).
+  CameraFeed? get eyeFeed => _eyeCam;
+
+  /// The front camera's live video, for Today (null without a front camera).
+  CameraFeed? get frontFeed => _frontCam;
 
   bool get eyeOnline => _lastEyeFrame != null && clock() - _lastEyeFrame! < 2;
   bool get frontOnline => _lastFrontFrame != null && clock() - _lastFrontFrame! < 2;
@@ -166,8 +178,8 @@ class PhoneEyes extends ChangeNotifier {
   /// calibrated (the default centres are too rough to crop Ask's photo by).
   String? get gazeRegion => eye.state.eyeDetected && gaze.calibrated && !gaze.calibrating ? gaze.smoothed : null;
 
-  /// Glasses on: the eye camera sees an eye. Without an eye camera there's no telling, so yes.
-  bool get worn => _eyeBoard == null || eye.state.eyeDetected;
+  /// Glasses on: the eye camera sees an eye. Without eye camera video there's no telling, so yes.
+  bool get worn => !eyeOnline || eye.state.eyeDetected;
 
   Future<void> start() async {
     if (persist) await _load();
@@ -197,11 +209,13 @@ class PhoneEyes extends ChangeNotifier {
       _eyeCam?.dispose();
       _eyeCam = _eyeBoard == null ? null : (_eyeBoard!.open()..start());
       _eyeCam?.frame.addListener(_onEyeFrame);
+      notifyListeners(); // the Eyes tab's live view follows the new feed
     }
     if (link.frontCam != _frontBoard) {
       _frontBoard = link.frontCam;
       _frontCam?.dispose();
       _frontCam = _frontBoard == null ? null : (_frontBoard!.open()..start());
+      notifyListeners(); // Today's front camera view follows the new feed
     }
   }
 
@@ -302,7 +316,9 @@ class PhoneEyes extends ChangeNotifier {
     done.forEach(history.closeupSession);
 
     final wasUp = headsUp.activeSince != null;
-    final hu = headsUp.update(t, objs.isNotEmpty, worn);
+    // Heads-up stops only for near-work the wearer looks at (any within reach while gaze is unknown).
+    final region = gazeRegion;
+    final hu = headsUp.update(t, lookedAt(objs, region == null ? null : regionColumns[region]).isNotEmpty, worn);
     if (hu != null) history.stretchEnded('heads_up', hu.$1, hu.$2);
     if (!wasUp && headsUp.activeSince != null) history.stretchStarted('heads_up', headsUp.activeSince!);
 
@@ -310,7 +326,14 @@ class PhoneEyes extends ChangeNotifier {
     Object? ev;
     if (worn || outdoor.manual != null) {
       final fresh = _sensorAt != null && t - _sensorAt! <= 5 ? _sensorReading : null;
-      ev = outdoor.update(t, luma: stats?.$1, sky: stats?.$2 ?? 0, exposureLines: fresh?.$1, gain: fresh?.$2);
+      ev = outdoor.update(
+        t,
+        luma: stats?.$1,
+        sky: stats?.$2 ?? 0,
+        exposureLines: fresh?.$1,
+        gain: fresh?.$2,
+        cameraOnly: _frontBoard != null && _frontBoard!.sensor == null,
+      );
     } else {
       final out = outdoor.flush(t); // glasses off: outside time stops counting
       if (out != null) ev = ('end', out);
@@ -338,12 +361,39 @@ class PhoneEyes extends ChangeNotifier {
     }
   }
 
+  /// The relay laptop's depth model: how far away what's ahead is, per gaze column.
+  Future<void> _pollAhead() async {
+    final url = _frontBoard?.distance;
+    if (url == null || _aheadBusy) return;
+    _aheadBusy = true;
+    try {
+      final r = await _http.get(url).timeout(const Duration(seconds: 1));
+      final j = r.statusCode == 200 ? jsonDecode(r.body) : null;
+      if (j is Map<String, dynamic>) {
+        _ahead = {
+          for (final region in regionColumns.keys)
+            if (j['${region}_cm'] is num) region: (j['${region}_cm'] as num).toDouble(),
+        };
+        _aheadAt = clock();
+      }
+    } catch (_) {
+      // not running --front-depth, or busy: the reading goes stale
+    } finally {
+      _aheadBusy = false;
+    }
+  }
+
+  /// How far away what the wearer looks at is (the center without gaze), while the depth model's reading is fresh.
+  double? aheadCm(double t) =>
+      _aheadAt != null && t - _aheadAt! <= 3 ? _ahead[gazeRegion ?? 'center'] : null;
+
   // -- twice a second ----------------------------------------------------------------
 
   int _ticks = 0;
 
   void _everyHalfSecond() {
     final t = clock();
+    unawaited(_pollAhead());
     // The eye camera stopped sending: say so to the tracker (no eye, no blinks).
     if (_lastEyeFrame != null && t - _lastEyeFrame! > 0.5 && !_eyeBusy) _eyeFeatures(null, t);
     if (_lastFrontFrame != null && t - _lastFrontFrame! > 2) _frontGone(t);
@@ -351,11 +401,14 @@ class PhoneEyes extends ChangeNotifier {
       // Stands in for the frame's sensor samples: distance, blinks and light (as the laptop's bridge did).
       link.addPhoneSens(
         SensMessage(
-          // the nearest screen or book in view; nothing near means looking at something far
-          distCm: nearwork.last.firstOrNull?.distanceCm.round() ?? farCm,
+          // what the wearer looks at, from the relay's depth model; else the nearest screen or
+          // book in view; nothing near means looking at something far
+          distCm: (aheadCm(t) ?? nearwork.last.firstOrNull?.distanceCm ?? farCm).round(),
           blink: _blinkSinceSens,
           yawRate: 0,
-          lux: ((_luma ?? 0) * 4).round(),
+          // Auto-exposure keeps the picture about as bright indoors as out, so outside
+          // (as the outdoor detector judges it) reads as daylight in the shade.
+          lux: outdoor.outside ? outsideLux : ((_luma ?? 0) * 4).round(),
         ),
       );
       _blinkSinceSens = false;

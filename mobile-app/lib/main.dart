@@ -62,6 +62,8 @@ void main() {
     vlm: vlm,
     flags: flags,
     sens: link.sens,
+    turns: link.turnRates,
+    gazeSide: () => phoneEyes.gazeRegion,
     backendCloseUp: () => backend.eyes?.sessionStart != null,
     onLookedUp: quests.creditLookUp,
   );

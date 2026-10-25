@@ -4,13 +4,16 @@
 //
 //   YOLO (laptop, cell phone, tv, keyboard, book) -> distance from apparent size
 //   -> CloseupTracker: sessions closer than a per-object threshold
-//   -> HeadsUpTracker: stretches with no near-work at all, glasses on
+//   -> HeadsUpTracker: stretches with no near-work looked at, glasses on: only
+//      objects within [nearWorkMaxCm] where the eye camera says the wearer is
+//      looking (left / center / right) count; without gaze, any within reach
 //
 // distance_cm = k / (longest side / frame width), with k from the lens
 // (0.5 / tan(hfov / 2) x the object's real longest side) until calibrated
 // at a known distance.
 
 import 'dart:math' as math;
+import 'dart:ui' show Rect;
 
 import '../vision/detector.dart';
 
@@ -23,11 +26,15 @@ const nearClasses = {
   'keyboard': ('keyboard', 44.0, 50.0),
 };
 
+/// Near-work further away than this (a TV across the room) doesn't stop heads-up time.
+const nearWorkMaxCm = 100.0;
+
 class NearObject {
-  const NearObject(this.label, this.distanceCm, this.frac);
+  const NearObject(this.label, this.distanceCm, this.frac, [this.box = const Rect.fromLTRB(0, 0, 1, 1)]);
   final String label;
   final double distanceCm;
   final double frac; // longest side / frame width
+  final Rect box; // where in the front picture, 0..1
   String get kind => nearClasses[label]!.$1;
   double get thresholdCm => nearClasses[label]!.$3;
   bool get close => distanceCm < thresholdCm;
@@ -54,6 +61,7 @@ class NearWorkEstimator {
             d.label,
             _k(d.label) / math.max(d.box.width, d.box.height * aspect),
             math.max(d.box.width, d.box.height * aspect),
+            d.box,
           ),
     ]..sort((a, b) => a.distanceCm.compareTo(b.distanceCm));
     return last = out;
@@ -70,6 +78,14 @@ class NearWorkEstimator {
     return k[label] = biggest.frac * knownCm;
   }
 }
+
+/// The near-work the wearer is looking at: within [maxCm], and overlapping [columns],
+/// the gaze region's left..right in the front picture (0..1). Without gaze ([columns]
+/// null) everything within reach counts.
+List<NearObject> lookedAt(List<NearObject> objs, (double, double)? columns, {double maxCm = nearWorkMaxCm}) => [
+  for (final o in objs)
+    if (o.distanceCm <= maxCm && (columns == null || (o.box.right > columns.$1 && o.box.left < columns.$2))) o,
+];
 
 class CloseupSessionRecord {
   const CloseupSessionRecord(this.start, this.end, this.object, this.minCm, this.avgCm);

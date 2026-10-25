@@ -3,6 +3,7 @@
 *
 !cloud/__init__.py
 !cloud/app.py
+!cloud/relay.py
 !cloud/requirements.txt
 !social/__init__.py
 !social/app.py

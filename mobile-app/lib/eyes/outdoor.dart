@@ -6,7 +6,10 @@
 //
 // from the board's /sensor. Outside = above a threshold for 60 s, inside again
 // = below a lower one for 60 s. A blue or bright top third (sky) lowers the
-// threshold a little. Without fresh sensor numbers there is no call.
+// threshold a little. Without fresh sensor numbers there is no call, except
+// from a camera that has none (a webcam, stock firmware): then sky in the top
+// third of a daylit picture for 60 s is outside, and too little sky for 60 s
+// is inside again. Rougher: a bright window can pass for sky.
 
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -76,10 +79,14 @@ class OutdoorDetector {
     this.band = 0.25,
     this.skyBoost = 0.2,
     this.skyMin = 0.3,
+    this.dayLuma = 50,
   }) : threshold = indoorRef != null && outdoorRef != null ? (indoorRef + outdoorRef) / 2 : 0.0;
 
   double? indoorRef, outdoorRef;
   final double holdS, band, skyBoost, skyMin;
+
+  /// Camera-only: darker pictures than this are night, never outside time.
+  final double dayLuma;
   double threshold;
   bool outside = false;
   double? _candidateSince;
@@ -88,7 +95,15 @@ class OutdoorDetector {
   double? lastBrightness;
 
   /// Returns ('start', t0) when outside began, ('end', (start, end)) when it ended.
-  Object? update(double t, {double? luma, double sky = 0, double? exposureLines, double? gain}) {
+  /// [cameraOnly]: the camera has no exposure numbers, so judge by the sky.
+  Object? update(
+    double t, {
+    double? luma,
+    double sky = 0,
+    double? exposureLines,
+    double? gain,
+    bool cameraOnly = false,
+  }) {
     final b = luma == null ? null : sceneBrightness(luma, exposureLines, gain);
     lastBrightness = b;
     final thr = threshold - (sky >= skyMin ? skyBoost : 0.0);
@@ -98,7 +113,9 @@ class OutdoorDetector {
       want = manual!;
       hold = 0;
     } else if (b == null) {
-      return null; // no trustworthy reading: keep the current state
+      if (!cameraOnly || luma == null) return null; // no trustworthy reading: keep the current state
+      want = !outside ? sky >= skyMin && luma >= dayLuma : sky >= skyMin / 3 && luma >= dayLuma;
+      hold = holdS;
     } else {
       want = !outside ? b > thr + band : !(b < thr - band);
       hold = holdS;

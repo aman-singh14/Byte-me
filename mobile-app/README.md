@@ -174,7 +174,10 @@ needs a deploy with `cloud/relay.py`. To skip the cloud, `--serve 8030 --key k` 
 paths from the laptop, for a phone that can reach it (Tailscale, or the same Wi-Fi):
 `http://<laptop>:8030/relay/k`.
 
-- **No outside time:** stock firmware has no `/sensor` exposure numbers, so the outside ring stays put.
+- **Outside time by the sky:** stock firmware and webcams have no `/sensor` exposure numbers, so
+  outside is judged from the picture alone: sky in its top third for a minute, in daylight. Rougher
+  than the board's exposure method (a bright window can pass for sky). While outside, the light
+  sent to the quests reads as daylight (10000 lux).
 - **Ask's photo** is the newest stream frame, 320x240 on stock firmware unless you add
   `--front-framesize 8` (640x480; costs about 4x the data).
 - **Data and lag:** the eye at 15 fps and the front at 5 fps are about 60 + 25 KB/s at 320x240
@@ -191,7 +194,15 @@ camera). The relay centre-crops it to 4:3 like the boards (the app's distances a
 
 With the laptop on the phone's hotspot, type `http://<laptop's 172.20.10.x>:8030/relay/k` in the
 app. Through the cloud instead (`--to`), use `--webcam-height 480 --front-fps 5` to save cellular
-data. macOS asks once to allow Camera for your terminal. Still no outside time (no exposure numbers).
+data. macOS asks once to allow Camera for your terminal. Outside time goes by the sky, as above.
+
+**Live distance** (`--front-depth`, after `.venv/bin/pip install transformers==5.20.2`): the laptop
+runs a depth model (Depth Anything V2, metric indoor, ~100 MB downloaded the first time, ~45 ms a
+frame on an M-series Mac) on the front frames and sends the distance to what's ahead in the left,
+center and right of the picture, 5 times a second. The app uses the side you're looking at (the
+middle until gaze is calibrated) for Eyes > Right now and the distance the quests and social taps
+use. Without it, distance is only known for a recognised screen or book, else 300 cm. Expect
+roughly ±20–30%.
 
 ## Rear view and detection
 
@@ -492,6 +503,12 @@ for a yes. While on: "Captions on · audio sent to Meta for transcription".
   (`backend/captions.py`, `WS /ws/captions`) that holds the Meta key, so the
   key is never in the app. The app sends 16 kHz 16-bit mono PCM from the mic
   (`record` package) in 100 ms pieces; caption events come back.
+- **Translate** (Aware tab, under the captions): each finished line in the language you
+  pick, big, with what was said small underneath. On the phone with Apple's Translation
+  framework (iOS 26+, `AppDelegate.swift`, `lib/captions/caption_translator.dart`): nothing
+  more is sent anywhere. Download the languages once in Settings > Apps > Translate >
+  Downloaded Languages; until then the card says which ones are missing. Very short lines
+  ("OK.") are left as they are, since their language can't be told.
 - **Turns:** partial text is shown lighter and in italics, then replaced by the
   final text. A label only where the speaker changes. Follows the newest
   line; scroll up to read back, "Jump to latest" to return. Size 20–48.

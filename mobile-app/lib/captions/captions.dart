@@ -18,6 +18,7 @@ import '../helper/helper_call.dart' show HelperSocket, IoHelperSocket;
 import '../net/backend_link.dart';
 import '../net/cloud.dart';
 import 'caption_transcript.dart';
+import 'caption_translator.dart';
 
 /// Override the relay, e.g. the mock:
 /// `--dart-define=CAPTIONS_URL=ws://localhost:8030/ws/captions`.
@@ -77,11 +78,14 @@ class Captions extends ChangeNotifier {
     required this.relay,
     CaptionMic? mic,
     Future<HelperSocket> Function(Uri url)? connect,
+    CaptionTranslator? translator,
   }) : mic = mic ?? RecordCaptionMic(),
+       translator = translator ?? AppleCaptionTranslator(),
        _connect = connect ?? IoHelperSocket.connect;
 
   final Uri? Function() relay;
   final CaptionMic mic;
+  final CaptionTranslator translator;
   final Future<HelperSocket> Function(Uri) _connect;
 
   static const sampleRate = 16000;
@@ -110,6 +114,13 @@ class Captions extends ChangeNotifier {
   /// The wearer has read what captions send, and agreed.
   bool consented = false;
 
+  /// Translate finished lines into this language (a [translationLanguages] code), or null.
+  String? translateTo;
+
+  /// Why lines aren't being translated, to show (e.g. the languages aren't downloaded).
+  String? translateMessage;
+  final _translating = <int>{};
+
   bool get on => _state != CaptionsState.off;
 
   SharedPreferences? _prefs;
@@ -121,6 +132,7 @@ class Captions extends ChangeNotifier {
   bool _ending = false;
 
   static const _sizeKey = 'captions_font_size', _consentKey = 'captions_consent', _labelsKey = 'captions_speakers';
+  static const _translateKey = 'captions_translate_to';
 
   Future<void> load() async {
     try {
@@ -128,6 +140,8 @@ class Captions extends ChangeNotifier {
       fontSize = (prefs.getDouble(_sizeKey) ?? fontSize).clamp(minFontSize, maxFontSize);
       consented = prefs.getBool(_consentKey) ?? false;
       speakerLabels = prefs.getBool(_labelsKey) ?? true;
+      final to = prefs.getString(_translateKey);
+      translateTo = translationLanguages.containsKey(to) ? to : null;
       notifyListeners();
     } catch (e) {
       debugPrint('Captions: could not load settings: $e');
@@ -151,6 +165,46 @@ class Captions extends ChangeNotifier {
     speakerLabels = on;
     _prefs?.setBool(_labelsKey, on);
     notifyListeners();
+  }
+
+  /// Translates finished lines into [code] from now on (and the ones on screen); null: off.
+  void setTranslateTo(String? code) {
+    translateTo = code;
+    translateMessage = null;
+    code == null ? _prefs?.remove(_translateKey) : _prefs?.setString(_translateKey, code);
+    _translateLines();
+    notifyListeners();
+  }
+
+  void _translateLines() {
+    final to = translateTo;
+    if (to == null) return;
+    for (final line in transcript.lines.reversed.take(20)) {
+      if (line.isFinal && !line.isEmpty && line.translatedTo != to && _translating.add(line.id)) {
+        unawaited(_translate(line, to));
+      }
+    }
+  }
+
+  Future<void> _translate(CaptionLine line, String to) async {
+    try {
+      final (text, source) = await translator.translate(line.text, to);
+      line.translation = text == line.text ? null : text;
+      line.translatedTo = to;
+      translateMessage = null;
+    } on TranslationUnavailable catch (e) {
+      line.translatedTo = to; // don't keep retrying this line
+      final from = translationLanguages[e.source] ?? 'this language';
+      translateMessage = switch (e.code) {
+        'not_installed' => "$from and ${translationLanguages[to]} aren't downloaded. $downloadLanguagesHint",
+        'unsupported' => "Can't translate $from into ${translationLanguages[to]}.",
+        'unavailable' => 'Translation needs an iPhone with iOS 26 or later.',
+        _ => "Couldn't translate a line.",
+      };
+    } finally {
+      _translating.remove(line.id);
+    }
+    if (translateTo == to) notifyListeners();
   }
 
   /// Starts captions. The caller asks for consent first.
@@ -178,6 +232,7 @@ class Captions extends ChangeNotifier {
 
   void clear() {
     transcript.clear();
+    translateMessage = null;
     notifyListeners();
   }
 
@@ -232,7 +287,10 @@ class Captions extends ChangeNotifier {
         debugPrint('Captions: error: $message');
         notifyListeners();
       default:
-        if (transcript.apply(event)) notifyListeners();
+        if (transcript.apply(event)) {
+          _translateLines();
+          notifyListeners();
+        }
     }
   }
 

@@ -15,7 +15,8 @@ ultralytics==8.4.187
 pyserial==3.5
 # FastAPI's TestClient (backend tests)
 httpx==0.28.1
-# Optional, not installed by default: pyttsx3 (speech off macOS)
+# Optional, not installed by default: pyttsx3 (speech off macOS); transformers==5.20.2 for
+# tools/cam_relay.py --front-depth (live distance from a depth model)
 # Call a helper: LiveKit tokens for two-way call audio (backend/helper.py). Optional:
 # without it (or without LIVEKIT_* keys) calls run with video and buzzes only.
 livekit-api==1.2.2
